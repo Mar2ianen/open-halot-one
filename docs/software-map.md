@@ -15,7 +15,7 @@ The user area is eMMC `/dev/mmcblk0`, 7,636,800 KiB. The start and size values b
 
 | Partition | Kernel label | Start | Size | Observed use / mount |
 |---|---|---:|---:|---|
-| `p1` | bootloader | 73,728 | 65,536 | bootloader region |
+| `p1` | bootloader | 73,728 | 65,536 | FAT16 volume with `hbootlogo.bmp`, `vbootlogo.bmp`, `bootlogo.bmp`, and `magic.bin`; the GPT label does not mean this partition contains executable U-Boot |
 | `p2` | env | 139,264 | 32,768 | boot environment |
 | `p3` | env-redund | 172,032 | 32,768 | redundant boot environment |
 | `p4` | recovery | 204,800 | 65,536 | recovery image |
@@ -26,7 +26,7 @@ The user area is eMMC `/dev/mmcblk0`, 7,636,800 KiB. The start and size values b
 | `p9` | private | 824,320 | 32,768 | VFAT mounted at `/device` (16 MiB) |
 | `p10` | UDISK | 857,088 | 14,416,479 | ext4 mounted at `/mnt/UDISK` (6.6 GiB) |
 
-The eMMC device also exposes separate `boot0` and `boot1` hardware areas. Their captures and hashes are recorded in the local snapshot manifest. RPMB was not read.
+The eMMC device also exposes separate `boot0` and `boot1` hardware areas. Their 4 MiB captures are byte-identical, but their code/content has not yet been identified. RPMB was not read. The update bundle contains an Allwinner TOC1 U-Boot package; its `awuboot` handler's exact destination has not been confirmed.
 
 ## Runtime services observed
 
@@ -47,8 +47,10 @@ The live executable was copied through the printer's ADB sync service. Local fac
 - Ghidra pseudocode for `MainView::InitSerialPort` constructs `CXSerial` with baud argument `0x1c200` (115,200). The device path is assembled from runtime strings/configuration, while `Controller::checkDev_ttyUSB0` has an explicit `ttyUSB0` check. In the inspected running state the open path resolves to `/dev/ttyS2`.
 - PrinterUI also held `/dev/fb0`, `/dev/disp`, `/dev/ion`, `/dev/mali0`, and all three input event nodes open. It had a TCP listener on port `18188` bound to a specific local address; the address itself is omitted from public docs. This records a local service endpoint, not proof of internet reachability.
 - The build strings include the vendor path `cxpm2-2.303.1`; this is a candidate application build version, not yet independently verified against a UI version screen or package metadata.
+- The serial link is configured as 115,200 baud, 8 data bits, no parity, one stop bit, no flow control. The live updater and PrinterUI both select `/dev/ttyS2` for this product. The STM32 package and GPIO reset/BOOT0 sequence confirm that the UART is used for the controller path; exact board pins and signal voltage remain unverified.
+- The `SendMsgToSerial` path sends a command in a 100-byte ASCII frame: command text followed by spaces, four `0x55` bytes at offsets 96–99, then LF. The code computes a 16-bit sum of bytes 0–95 but does not place it in the transmitted buffer. Replies are read as LF-terminated lines, at most 100 bytes; the parser splits response type and payload on `_`. A separate `Meng` path writes its string directly and also reads line replies. These are static findings; no UART traffic was captured.
 
-The executable clone, focused Ghidra project, and pseudocode exports are local artifacts. This repository records the analysis results without redistributing the vendor executable or bulk decompiled source. See [the PrinterUI analysis](printerui-analysis.md) for the call flow and function addresses.
+The executable clone, focused Ghidra project, and pseudocode exports are local artifacts. This repository records the analysis results without redistributing the vendor executable or bulk decompiled source. See [the PrinterUI analysis](printerui-analysis.md) for the call flow and function addresses, [the protocol map](protocols.md) for the UART framing and STM32 command catalog, and [the firmware/update analysis](firmware-update.md) for the vendor update chain.
 
 ## Analysis method
 

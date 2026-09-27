@@ -71,7 +71,7 @@ Creality lists replacement part `4002010045` as `HALOT-ONE Mainboard Kit_2.0_32_
 - USB host for a flash drive
 - spare firmware/debug interface (manufacturer-only)
 
-The STM32's exact part number, clock, firmware revision, and electrical assignments have not been confirmed on this unit. The `A4988` designation is part of the vendor's replacement-board name; it does not establish the exact number of populated driver chips or connector pinout on this PCB revision.
+The downloaded rootfs includes an STM32 updater and `V1-01.bin`, confirming a distinct STM32 application firmware path. Its startup script selects the H616 UART `/dev/ttyS2` for this product and toggles H616-side GPIOs `PA6` (BOOT0) and `PA0` (reset) when entering the STM32 ROM updater. The exact MCU part number, clock, PCB revision, board connector, MCU UART pins, voltage levels, and electrical assignments have not been confirmed on this unit. The `A4988` designation is part of the vendor's replacement-board name; it does not establish the exact number of populated driver chips or connector pinout on this PCB revision.
 
 ## Linux-side buses observed
 
@@ -81,7 +81,7 @@ The STM32's exact part number, clock, firmware revision, and electrical assignme
 | I²C 2, `0x50` | `rockchip,rk628` | Bound to `rk628`; video-bridge family, connection to either panel TBD |
 | I²C 3, `0x38` | `cxsw_ctp` | Touch input controller; `/dev/input/event2` |
 | I²C 5, `0x36` | `axp806` | Power-management IC driver name |
-| UART | `ttyS0`, `ttyS1`, `ttyS2` | `ttyS0` is the Linux console; PrinterUI held `/dev/ttyS2` open while running, making it the leading control-board UART candidate; physical endpoint remains untraced |
+| UART | `ttyS0`, `ttyS1`, `ttyS2` | `ttyS0` is the Linux console; PrinterUI and the STM32 updater use `/dev/ttyS2` for the control path; physical endpoint, connector, signal level, and MCU pins remain untraced |
 
 These names are Linux driver/client labels observed under `/sys/bus/i2c/devices`; they are not all independently confirmed silicon part numbers.
 
@@ -96,3 +96,5 @@ The printer has not been opened. The next useful evidence, if the owner later ch
 - [Creality HALOT-ONE product specifications](https://www.creality.com/download/creality-halot-one-resin-3d-printer)
 - [Creality wiring/UV troubleshooting diagram](https://wiki.creality.com/en/halot-series/halot-series-general-troubleshooting/the-uv-light-remains-on-even-after-turning-off-the-clear-screen-or-completing-the-print)
 - [Rockchip RK628D video-bridge overview](https://www.rock-chips.com/a/cn/news/rockchip/2021/0402/1383.html)
+- [UART, STM32 command, and ROM-loader protocol findings](protocols.md)
+- [Firmware/update chain and boot path](firmware-update.md)
