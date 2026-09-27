@@ -64,6 +64,8 @@ The statically recovered `libuapi` backend:
 
 Live kernel output independently shows H616 HDMI at 540×2560 reaching the RK628 at I²C2 address `0x50`, then MIPI DSI1 initialized with four lanes at 840 Mb/s each. The I²C0 `cxsw,dlp1438` path is not active for this unit; its probe rejects the product. The operator GUI is separate: it uses `/dev/fb0` at 800×480 RGB24.
 
+The recovered layer loop has two independent synchronization channels. PrinterUI submits the frame with `SendBgraImage`, and it uses the display backend's `waitExposureFinished` result to decide when the exposure has completed. Separately, it sends `M678` over UART, waits for the matching reply and motor status, then polls `M114` before calling `openLight` (`M42 P36 M1 S0`). The STM32's M678 worker sets the event bit that M114 can consume as `M114_DELATLIGHT_OVER`. This strongly suggests an MCU phase gate before light-on, but no passive layer trace has confirmed the exact reply accepted by PrinterUI. The MCU status replies do not report the display backend's exposure completion.
+
 ## Remaining physical evidence
 
 - Trace the DSI1 FPC from the RK628 to the exposure panel and record connector orientation/pin mapping.

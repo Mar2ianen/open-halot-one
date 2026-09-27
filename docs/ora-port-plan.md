@@ -21,7 +21,7 @@ The ORA contact page directs project requests to the relevant repository's GitHu
 | Host | Allwinner H616, TinaLinux, vendor Linux `4.9.170`, U-Boot `2018.05` | A HALOT board DTS, supported boot-image packaging, active/fallback boot path, and a proven rollback route |
 | Operator UI | Display engine reports an `800x480@59` RGB24 screen; touch controller appears at I²C3 `0x38` | Panel timing/power details for a mainline DTS; mapping and calibration of all touch events under the new UI |
 | Exposure display | Active path is H616 HDMI output at 540×2560 → RK628 HDMI RX at I²C2 `0x50` → MIPI DSI1 at 4 × 840 Mb/s; `dsi_err=0`. This matches PrinterUI's 1620-to-540 layer compression. The I²C0 `dlp1438` driver rejects this product (`-22`). | Physical FPC trace, exact pixel-to-column mapping, timing controls, layer synchronization, error recovery, and a mainline RK628/panel driver |
-| Control MCU | PrinterUI and the startup updater use `/dev/ttyS2`; application link is 115200 8N1; fixed framing, command families, `M678` parameter storage, event wakeup, worker phases, and `M113`/`M114` busy-state behavior are documented in [the protocol map](protocols.md) | Physical meaning/units of `M678` fields, exact timing and display-to-MCU gate, remaining command semantics, and a passive wire trace |
+| Control MCU | PrinterUI and the startup updater use `/dev/ttyS2`; application link is 115200 8N1; fixed framing, `M678` storage/state flow, `M113`/`M114`, `M108` input bits, and static `M42`/`M355`/`M410` behavior are documented in [the protocol map](protocols.md) | Physical meaning/units of layer fields, timer units, exact display-to-MCU gate, output pin mapping, remaining `M106`/`M107` and MengTool semantics, and a passive wire trace |
 | Firmware update | The vendor startup script can toggle BOOT0/reset and call `stm32flash` to write the bundled Cortex-M image | Exact STM32 part/read-protection state and safe recovery behavior; do not use the update sequence as a test command |
 | Display userspace | Stock PrinterUI expects vendor interfaces including `/dev/disp` and `/dev/ion` | Replace/adapt these consumers for DRM/KMS and modern buffer allocation, or keep the vendor kernel while proving the ORA userspace stack |
 
@@ -47,7 +47,7 @@ On a newer kernel, the existing UI's vendor `/dev/disp` and `/dev/ion` assumptio
 
 ### 2. Complete the hardware/software interface map
 
-- Finish static analysis of the STM32 image and map protocol handlers, replies, parameters, homing, stop, UV, fans, and temperature behavior.
+- Finish the residual static STM32 cases: `M106`/`M107` value effects, all `M410` branches, MengTool's direct serial path, and physical meanings for the recovered GPIO/PWM operations.
 - Reproduce PrinterUI's 1620-to-540 layer packing and confirm how RGB channels map to monochrome columns; capture image/output timing relative to STM32 exposure commands.
 - Keep the operator UI and exposure display as separate pipelines. The exposure route is traced through the RK628 to DSI1, while the physical panel FPC and exact pixel mapping remain open.
 - Capture only passive serial traffic first; do not probe by sending motion or UV commands during protocol discovery.
