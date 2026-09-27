@@ -10,7 +10,7 @@ RPMB is not part of the user-area image and was not read. The image is taken whi
 
 The kernel command line describes GPT entries `bootloader`, `env`, `env-redund`, `recovery`, `boot`, `rootfs`, `rootfs_data`, `misc`, `private`, and `UDISK` on `/dev/mmcblk0p1` through `p10`. At runtime, `p6` is read-only SquashFS `/rom`; `p7` is ext4 `/overlay`; `p9` is VFAT `/device`; and `p10` is ext4 `/mnt/UDISK`.
 
-The whole user-area block device reports 7,636,800 KiB. Exact partition start/size values and image checksums are recorded in the local `snapshot/manifest.txt` after capture completes.
+The whole user-area block device reports 7,636,800 KiB (7,820,083,200 bytes). The read-only capture completed at that exact byte count. The local zstd image decodes to the same SHA-256 as the captured raw stream. Separate 4 MiB `boot0` and `boot1` captures also completed; their hashes match each other. Exact file sizes and checksums are in the local `snapshot/manifest.txt`.
 
 ## Private local artifact set
 
