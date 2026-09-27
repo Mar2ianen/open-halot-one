@@ -1,0 +1,13 @@
+# Device-specific dumps and vendor firmware are kept in the owner's private archive.
+*.raw
+*.img
+*.img.zst
+*.bin
+*.elf
+*.gpr
+*.rep/
+*.rcc
+PrinterUI.original
+ghidra-project/
+snapshot/
+private/
