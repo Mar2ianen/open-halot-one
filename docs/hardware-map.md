@@ -6,6 +6,8 @@
 flowchart LR
   H[Allwinner H616
   TinaLinux / Qt PrinterUI]
+  G[Mali-G31
+  1 core; product ID 0x7093]
   T[5-inch color touch UI
   lcd0 / RGB24 / fb0]
   C[Touch controller
@@ -21,6 +23,7 @@ flowchart LR
   I2C2 0x50; HDMI-RX to DSI1]
   D[CXSW DLP1438 DT node
   I2C0 0x1b; probe rejected]
+  H -->|GPU via /dev/mali0| G
   H -->|Allwinner display engine / fb0| T
   C -->|I2C; input event2| H
   H -->|/dev/disp HDMI output;
@@ -36,6 +39,8 @@ flowchart LR
 ```
 
 The operator-screen path is the H616 display engine's `lcd0`/`fb0` output. The live kernel log confirms a second active path: H616 HDMI output at 540×2560, RK628 HDMI receive, then RK628 MIPI DSI1 at four 840 Mb/s lanes. This mode matches PrinterUI's 1620-to-540 compressed layer width. The internal board HDMI routing and final panel FPC were not inspected physically, so those board-level connections remain inferred from the active signal and software profile. The DLP-named image backend is a model-dependent app branch, not evidence that the CL60 uses a DLP panel. Creality's replacement-board listing identifies an STM32 and A4988, but the silkscreen on this individual printer has not been photographed.
+
+The H616 GPU is confirmed live as `Mali-G31 1 core r0p0 0x7093` in `/sys/devices/platform/gpu/gpuinfo`; the loaded `mali_kbase` module reports `r20p0-01rel0 (UK version 11.17)`. The captured device tree's GPU-node compatible is only the generic `arm,mali-midgard`. The node is shown as an SoC component used through `/dev/mali0`; the exact Qt rendering buffer handoff into `lcd0` scanout is not established, so the diagram does not draw a GPU-to-panel signal path.
 
 ## Display 1: operator touchscreen
 
@@ -84,6 +89,7 @@ The downloaded rootfs includes an STM32 updater and `V1-01.bin`, confirming a di
 | I²C 3, `0x38` | `cxsw_ctp` | Touch input controller; `/dev/input/event2` |
 | I²C 5, `0x36` | `axp806` | Power-management IC driver name |
 | UART | `ttyS0`, `ttyS1`, `ttyS2` | `ttyS0` is the Linux console; PrinterUI and the STM32 updater use `/dev/ttyS2` for the control path; physical endpoint, connector, signal level, and MCU pins remain untraced |
+| GPU | `/dev/mali0`, platform device `gpu` | Live `gpuinfo` identifies Mali-G31, one core, product ID `0x7093`; proprietary `mali_kbase` module `r20p0-01rel0` |
 
 These names are Linux driver/client labels observed under `/sys/bus/i2c/devices`; they are not all independently confirmed silicon part numbers.
 

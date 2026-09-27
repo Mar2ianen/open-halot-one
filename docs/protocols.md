@@ -14,6 +14,18 @@ This page separates the Linux-to-controller serial protocol, the STM32 applicati
 
 The `CD60` and `D160` product branches select `/dev/ttyS3`; the other branch selects `/dev/ttyS2`. The inspected unit reports `CL60`.
 
+### STM32 UART and DMA setup recovered in Renode
+
+The raw application image was run in Renode against its STM32F103 platform with a deliberately minimal RCC stub. CPU writes to the STM32F1 register map configure:
+
+| MCU peripheral | Firmware configuration observed | Interpretation |
+|---|---|---|
+| USART1 RX | DMA1 channel 5; `CPAR=0x40013804`, `CMAR=0x20000578`, `CNDTR=0xc8`, then channel enable | 200-byte peripheral-to-memory receive buffer |
+| USART2 RX | USART2 CR3 `DMAR` set; DMA1 channel 6; `CPAR=0x40004404`, `CMAR=0x200007d0`, `CNDTR=0xc8`, then channel enable | 200-byte peripheral-to-memory receive buffer |
+| USART2 TX | USART2 CR3 `DMAT` set; DMA1 channel 7 points at `0x40004404` and RAM buffer `0x20000640`; initial transfer count is zero | Memory-to-peripheral transmit path, likely armed when a reply is sent |
+
+The DMA channel mappings and register addresses are consistent with an STM32F1 USART1/USART2 arrangement. USART2 is the strongest candidate for the H616 `/dev/ttyS2` control link, but that physical pin-level connection is not yet proven. This run recovered peripheral configuration only: DMA was a memory-backed stub, so there was no UART reception/transmission, no protocol transcript, and no evidence of transfer-complete timing. Renode's [STM32F103 platform](https://github.com/renode/renode/blob/master/platforms/cpus/stm32f103.repl) is a base rather than a full model of the exact Creality MCU; missing blocks can be added using its [Python peripheral mechanism](https://renode.readthedocs.io/en/latest/basic/using-python.html).
+
 ## Control UART versus layer-image path
 
 The UART is the STM32 control/status channel: it carries the ASCII-like commands and line replies described below. CL60 layer bitmaps use a separate H616 video-output path. The active `CL60` profile in `halotMachine.xml` selects `CreateVideoOutport`, source dimensions 1620×2560, compressed dimensions 540×2560, and `RgbRange=BGRA`. Static analysis of `writerClearImage` shows each output pixel is built from three consecutive source samples and an opaque alpha byte. The running kernel shows the 540×2560 mode entering the RK628 HDMI receiver before MIPI DSI1. Thus the large exposure bitmap is not framed into the 100-byte UART command protocol. The software-side pixel packing is recovered; the exact downstream RK628/DSI mapping to panel columns remains open. See [the display data path](display-pipeline.md).
@@ -44,18 +56,20 @@ The following strings and call sites are present in both sides of the control li
 
 ### Traced UI-start exchange
 
-To test tracing without attaching to the existing process, the idle PrinterUI was briefly restarted as a child of `strace -f` by manually invoking its existing `S99cxpm-ui` service entry. No persistent init file was edited, and the distinct `S21stm32_update` service was not run. The device accepted this launch-time trace. It opened `/dev/ttyS2` with `O_RDWR|O_NOCTTY|O_NONBLOCK` (fd 27 in that run), sent the following 101-byte request, then read the reply one byte per syscall:
+To test tracing without attaching to the existing process, the idle PrinterUI was briefly restarted as a child of `strace -f` by manually invoking its existing `S99cxpm-ui` service entry. No persistent init file was edited, and the distinct `S21stm32_update` service was not run. The device accepted this launch-time trace. It opened `/dev/ttyS2` with `O_RDWR|O_NOCTTY|O_NONBLOCK` (fd 27 in that run), sent two 101-byte requests, then read the replies one byte per syscall:
 
 ```text
+TX: "V114" + spaces through byte 95 + 55 55 55 55 0a
+RX: "89\n"
 TX: "MODELS:A" + spaces through byte 95 + 55 55 55 55 0a
 RX: "GET MODELS:A OK\n"
 ```
 
-Before that request, the trace recorded three unexplained inbound bytes, `38 39 0a` (`"89\n"`; each byte arrived in a separate read), with no host write on the UART immediately before them. Their meaning is unresolved. This single startup sample confirms the frame padding/trailer and the `MODELS:A` reply format. It does not cover the periodic idle queries or a print layer. The broad trace slowed startup enough that PrinterUI reported a heap-corruption error; the trace was stopped, its temporary files were removed from the device, and the normal UI service was restarted and verified with `TracerPid=0`. No print, UV, or motor action was initiated. See [emulator and tracing experiments](emulation.md) for the QEMU results and limits.
+The `V114`/`89` pair is consistent with a version query and the firmware string `SWV1.89`, although the wire response itself contains only `89`. This captured startup sequence confirms the common frame padding/trailer, the version response, and the `MODELS:A` reply format. It does not cover periodic idle queries or a print layer. The broad trace slowed startup enough that PrinterUI reported a heap-corruption error; the trace was stopped, its temporary files were removed from the device, and the normal UI service was restarted and verified with `TracerPid=0`. No print, UV, or motor action was initiated. See [emulator and tracing experiments](emulation.md) for the QEMU and Renode results and limits.
 
 | Family | Observed command/string | Current interpretation |
 |---|---|---|
-| Version/model handshake | `V114 `, `MODELS:`, `MODELS `, `GET MODELS:%s OK` | PrinterUI sends `V114 ` and later a `MODELS:` request; the image contains `SWV1.89`. The exact complete request/reply transcript is inferred from strings and call order, not captured. |
+| Version/model handshake | `V114`, `MODELS:`, `MODELS `, `GET MODELS:%s OK` | Startup trace captures `V114` → `89\n` and `MODELS:A` → `GET MODELS:A OK\n`; the version interpretation is consistent with `SWV1.89` in the MCU image. |
 | Z axis | `G0 Z500 F… D1 S1/S0 H…`; `G0 Z… F… D0 S1/S0 H…` | UI builders label the first command “up” and the second “down”; `F` is a speed-like parameter, `H` is the configured helical pitch, and `S` selects the external/non-external motor variant. |
 | Position/status | `M114`, `M113`, `M108`, `M410 S0/S1/S2` | Used by status, homing, stop, or busy-state paths; exact `M410` submode meanings are not fully recovered. |
 | Layer operation | `M678 Z… U… D… T… P… M… L…` | PrinterUI builds this exact ordered template for first, bottom, and regular layers. STM32 immediately replies `M678_Busy`, then parses all seven decimal parameters and updates print/motor state. `M113`/`M114` are separate state queries used by the UI while it waits. The field names/order are certain; units and every field's role in the controller state are not. |

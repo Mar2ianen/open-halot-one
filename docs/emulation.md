@@ -17,6 +17,14 @@ The MCU image was tried on two QEMU Cortex-M3 boards:
 
 Those addresses match the STM32F1-style RCC, GPIOA, and DMA1 regions. This is strong evidence for an STM32F1-compatible peripheral map, but it does not identify the exact MCU or board revision. QEMU's available board models do not provide the needed combination of SRAM size and matching STM32F1 peripherals, so their later register values and execution state are not meaningful evidence about the printer firmware. No protocol conclusions were inferred from these failed board runs.
 
+### Renode follow-up
+
+Renode `1.16.1.16973` provides an [STM32F103 Cortex-M3 platform](https://github.com/renode/renode/blob/master/platforms/cpus/stm32f103.repl) that is a closer starting point than either QEMU board. The Creality image was loaded at `0x08000000` with its vector-table offset set to that address, initial SP `0x20004460`, and reset PC `0x0800019c`. The stock platform description has USART/GPIO models but no behavioral RCC or DMA model in this Renode build. A private RCC stub was therefore used to report HSI/HSE/PLL ready and reflect the requested clock source; DMA1 and Flash control were temporarily represented by memory-backed register windows. These stubs are experiment fixtures, not models of the actual chip. Renode documents [Python peripherals](https://renode.readthedocs.io/en/latest/basic/using-python.html) as one way to model or mock missing blocks.
+
+With those fixtures the image clears its RCC startup waits and configures serial DMA before continuing into application code. The observed configuration is consistent with USART1 RX on DMA1 channel 5 (200-byte buffer at `0x20000578`), USART2 RX on channel 6 (200-byte buffer at `0x200007d0`), and USART2 TX on channel 7 (data register `0x40004404`, buffer at `0x20000640`). USART2's CR3 is written with `0xc0` (DMAT and DMAR). This is register-configuration evidence from CPU execution, not a captured UART byte stream. The memory-backed DMA registers do not move bytes, raise transfer-complete flags, or model request timing, so this run cannot validate the protocol or show that these channels complete a transfer.
+
+A five-second virtual-time run progressed beyond this setup; a sampled PC landed in a bytewise string-comparison routine. Because DMA, Flash wait states, and peripheral timing are still incomplete, that PC sample is not enough to identify the main-loop state. No command replies or image payloads have been generated in Renode.
+
 ## Launch-time `strace` on the printer
 
 Attaching `strace` to the already-running UI was denied by the device's ptrace policy. Starting the UI as a child of `strace -f` worked. For the experiment, the existing `S99cxpm-ui` service entry was launched manually under `strace`; no persistent init file was edited, and the separate `S21stm32_update` boot service was not run. This captured one UART startup exchange documented in [the protocol map](protocols.md).
@@ -25,8 +33,20 @@ The broad syscall trace perturbed this UI build: startup logged a heap-corruptio
 
 ## What would make emulation useful
 
-- Identify the STM32 marking from an external board photo or later physical inspection; then select or build a matching MCU model with the right flash, SRAM, RCC, GPIO, DMA, timers, SPI, and UART.
-- For the Linux UI, provide a matching H616 kernel and the vendor `/dev/mali0`, `/dev/disp`, and ION interfaces, or build explicit test doubles for them and a fake UART endpoint. QEMU user-mode alone cannot reproduce those kernel drivers.
+- Identify the STM32 marking from an external board photo or later physical inspection; then complete the Renode model for its RCC, Flash, DMA request routing, timers, SPI, and UART. The documented Renode STM32F103 platform is a useful base, and Renode's Python peripheral mechanism can mock or implement missing register blocks, but each mock must reproduce the side effects that the firmware polls before using the result.
+- For a faithful Linux UI run, provide a matching H616 kernel and the vendor `/dev/mali0`, `/dev/disp`, and ION interfaces, or build explicit test doubles for them and a fake UART endpoint. QEMU user-mode alone cannot reproduce those kernel drivers.
 - Keep the present emulation artifacts and raw syscall traces private. They include vendor firmware or machine-specific runtime data and are not needed in the public documentation repository.
+
+### What “emulate Mali” can mean here
+
+The live driver reports `Mali-G31 1 core r0p0 0x7093`; the loaded `mali_kbase` module reports `r20p0-01rel0 (UK version 11.17)`. The captured device tree uses the generic compatible string `arm,mali-midgard`, so the driver's live `gpuinfo` is the more specific model evidence. PrinterUI opens `/dev/mali0`, while the operator-screen scanout is separately exposed as H616 `lcd0`/`fb0`; the exact Qt render-target-to-scanout path has not been traced.
+
+| Goal | Available approach | What it would and would not reproduce |
+|---|---|---|
+| Run graphics API calls without the printer GPU | QEMU `virtio-gpu` with VirGL, or a Mesa/SwiftShader software renderer | Can provide a virtual OpenGL/GLES path for a guest or adapted application. It does not implement the H616 kbase ABI, `/dev/mali0`, Sunxi ION, `/dev/disp`, or RK628 display route. |
+| Exercise a real Mali-style kernel-driver integration virtually | Arm Fast Models Graphics Register Model (GRM) | Arm documents a Mali-G71 register model that invokes the host GPU for rendering and supports integration testing with the Mali driver stack. It is not a Mali-G31 model, so it is not an exact match for this printer. |
+| Run this unmodified PrinterUI against its expected device interfaces | Use the printer's H616/G31 stack, or build compatible test doubles and replace/redirect the display backend | The stock binary depends on vendor kernel interfaces and the H616 display path; a generic GPU API emulator alone is insufficient. |
+
+Mesa Panfrost supports Mali-G31 on real hardware, but that is an open driver, not a simulator for a missing Mali device. If the target is a new host OS port, Panfrost may be a candidate after checking H616 display-controller support; it does not make QEMU expose the printer's existing G31 hardware interface. QEMU's 2D virtio-gpu backend instead expects a software renderer for 3D, while its VirGL backend translates guest OpenGL calls for host-side rendering. [QEMU virtio-gpu documentation](https://www.qemu.org/docs/master/system/devices/virtio/virtio-gpu.html), [Mesa Panfrost documentation](https://docs.mesa3d.org/drivers/panfrost.html), and Arm's [Fast Models GRM documentation](https://documentation-service.arm.com/static/5f48caef6e73485d721e9790) describe these distinct approaches.
 
 The experiments were offline or read-only with respect to the printer. No update, bootloader, partition, or MCU write was performed.
