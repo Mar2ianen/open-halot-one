@@ -87,7 +87,7 @@ The `V114`/`89` pair is consistent with a version query and the firmware string 
 | Version/model handshake | `V114`, `MODELS:`, `MODELS `, `GET MODELS:%s OK` | Startup trace captures `V114` → `89\n` and `MODELS:A` → `GET MODELS:A OK\n`; the version interpretation is consistent with `SWV1.89` in the MCU image. |
 | Z axis | `G0 Z500 F… D1 S1/S0 H…`; `G0 Z… F… D0 S1/S0 H…` | UI builders label the first command “up” and the second “down”; `F` is a speed-like parameter, `H` is the configured helical pitch, and `S` selects the external/non-external motor variant. |
 | Position/status | `M114`, `M113`, `M108`, `M410 S0/S1/S2` | Used by status, homing, stop, or busy-state paths; exact `M410` submode meanings are not fully recovered. |
-| Layer operation | `M678 Z… U… D… T… P… M… L…` | PrinterUI builds this exact ordered template for first, bottom, and regular layers. STM32 immediately replies `M678_Busy`, then parses all seven decimal parameters and updates print/motor state. `M113`/`M114` are separate state queries used by the UI while it waits. The field names/order are certain; units and every field's role in the controller state are not. |
+| Layer operation | `M678 Z… U… D… T… P… M… L…` | PrinterUI builds this exact ordered template for first, bottom, and regular layers. STM32 emits `M678_Busy` before parsing the seven values, then sets busy state and wakes a worker task. This is an acceptance/busy reply, not a completion reply. `M113`/`M114` are separate status queries used while the asynchronous state machine runs. |
 | Temperature | `M105`, `M105 T… ON`, `M105 T OFF`; reply template `M105_TA…_TB…` | Temperature query/report and on/off control paths. |
 | UV/light | `M42 P36 M1 S0` / `M42 P36 M1 S1`; `M355 P1 C…`; `M355` | UI functions name the `M42` calls `openLight`/`closeLight`; the MCU replies `M42_OK_LED`. The `M355 P1 C…` handler replies `M355_OK`, builds a 10-byte SPI payload containing the 16-bit `C` value repeated three times, and appends the low byte of the one's-complement sum of bytes 0–8. It then sends fixed 3-byte SPI commands with 500 ms waits. The fixed packet header and the electrical target of this SPI path remain unresolved. |
 | Fans/outputs | `M106`, `M107`, `M106 P1 S255`, `M107 P1 S0/S255` | Fan/output control strings; output labels and electrical mapping remain unconfirmed. |
@@ -109,7 +109,32 @@ PrinterUI's literal template is `M678 Z%1 U%2 D%3 T%4 P%5 M%6 L%7 ` (including a
 | `M` | `0x3d` | Value scaled by 1000 by the UI; exact firmware meaning is not named. |
 | `L` | `0x47` | Value is calculated from the parsed layer/job data by PrinterUI; exact firmware meaning and units are not named. |
 
-These statements describe data flow, not guessed units. The firmware parses the command and starts its internal state changes after emitting `M678_Busy`; the UI polls other commands for motion/exposure state. No `M678` test was sent.
+The STM32 stores these parsed values as binary64 pairs at build-specific RAM addresses. `U`, `D`, `P`, `M`, and `L` are copied directly. `Z` and `T` are each multiplied by the binary64 constant `2.04345703125` before storage. The observed destinations are:
+
+| Word | STM32 RAM destination | Transformation before storage |
+|---|---:|---|
+| `U` | `0x200000b0` | Parsed binary64 copied directly |
+| `D` | `0x200000b8` | Parsed binary64 copied directly |
+| `Z` | `0x200000c0` | Parsed binary64 × `2.04345703125` |
+| `T` | `0x200000c8` | Parsed binary64 × `2.04345703125` |
+| `P` | `0x200000d0` | Parsed binary64 copied directly |
+| `M` | `0x200000d8` | Parsed binary64 copied directly |
+| `L` | `0x200000e0` | Parsed binary64 copied directly |
+
+The current static call paths use `Z` and `U` in the initial worker action, use `T`, `Z`, and `U` in a later timed phase, feed `L` through an integer conversion into a ten-entry history array, and combine `M` and `P` in later timer/counter arithmetic. `D` is parsed and stored, but the reviewed direct global-reference scan found no read of `0x200000b8`; it may be reserved, consumed indirectly, or unused in this build. These are data-flow findings only; they do not name units or assign physical meaning to the fields.
+
+The dispatcher also reads token slot 8 at scratch offset `0x50`, beyond the seven named words. An exact `P2` token takes a bit-band-output branch. The same slot is then compared with exact `S`: exact `S` skips the numeric-array path; otherwise the dispatcher parses the substring after the first character and fills a ten-word array with the converted value. With the ordinary PrinterUI template, slot 8 is empty, so the numeric helper receives an empty string and the array is initialized with zero. The electrical function of the bit-band writes and the intended public syntax remain unknown.
+
+### `M678` asynchronous state and completion path
+
+The state byte at `0x20000077` is both a status suffix source (`M113_Busy_%d` / `M114_Busy_%d`) and a worker-state selector. Static disassembly gives this flow:
+
+1. On a matching `M678`, the dispatcher first transmits `M678_Busy\n`. It then parses/stores the parameters, sets bytes `0x20000076 = 1`, `0x20000075 = 1`, and `0x20000077 = 0`, and sets event-group bit 0 on the object referenced by `0x20000024` if that bit is not already set.
+2. A worker waits on bit 0 of that event object (with a 1000-tick wait argument in this build). It advances the layer routine only when both busy bytes `0x20000076` and `0x20000075` equal 1. That routine selects on the state byte and advances through the numeric states 1, 2, 3, 4, 5, and 6; it also has a state-7 path that advances to 8 and signals bit 0 on a second event object referenced by `0x2000001c`. State 6 itself has no transition in the reviewed routine, so another asynchronous/timer path must advance it.
+3. The timer-side routine at `0x080028c8` compares raw counters at `0x20000068`, `0x2000006c`, and `0x20000070`, with additional state at `0x20000074` and `0x20000078`. It can set the worker state to 7. Its terminal branch writes `0x20000077 = 100`, clears busy bytes `0x20000076` and `0x20000075`, and clears `0x20000074`/`0x20000078`.
+4. `M113` and `M114` report a busy response while their shared raw busy aggregate is nonzero. If both busy bytes are 1, the reply includes the current state byte; otherwise the reply is plain `Busy`. When the timer path clears the busy bytes, the status handler can return `OK`/`OK1` even though the state byte has just been set to 100. Thus 100 is established as an internal terminal marker, not a guaranteed wire-visible completion response.
+
+The worker's numbered states describe internal phases, not layer numbers or percentages. The exact timing units, event-object ownership, motor/light operations performed in each phase, and which state transitions are driven by the display path remain unresolved. No `M678` command was sent; these conclusions come from the shipped binary and PrinterUI templates.
 
 ## STM32 ROM bootloader protocol
 
@@ -122,5 +147,5 @@ The updater's `stm32flash` information command omits `-b`, so the utility's own 
 - A passive UART capture during idle, status query, manual Z movement, light control, and a harmless temperature query.
 - Board photographs or electrical probing to identify the UART connector, logic levels, MCU marking, reset/BOOT0 routing, and the display connectors.
 - A longer but less perturbative passive UART capture for periodic idle queries and print-layer synchronization. Launch-time `strace -f` works where attaching to the existing PID is denied, but tracing all startup file I/O perturbs this UI build. A second reader on `/dev/ttyS2` is not safe because it could consume PrinterUI replies.
-- The remaining `M678`/`M410`/`M355` state semantics and units, and the complete direct `MengTool` command path.
+- The remaining `M678` physical semantics and units, exact timer tick rate, how the display path gates MCU phases, `M410`/`M355` state semantics, and the complete direct `MengTool` command path.
 - The full STM32 interrupt/peripheral/register map and resolved names for the many remaining functions. Ghidra pseudocode, the 257-function index, and string cross-references are available privately; this public project does not redistribute the vendor image or pseudocode.
