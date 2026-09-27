@@ -20,7 +20,7 @@ The ORA contact page directs project requests to the relevant repository's GitHu
 |---|---|---|
 | Host | Allwinner H616, TinaLinux, vendor Linux `4.9.170`, U-Boot `2018.05` | A HALOT board DTS, supported boot-image packaging, active/fallback boot path, and a proven rollback route |
 | Operator UI | Display engine reports an `800x480@59` RGB24 screen; touch controller appears at I²C3 `0x38` | Panel timing/power details for a mainline DTS; mapping and calibration of all touch events under the new UI |
-| Exposure display | RK628 is active at I²C2 `0x50`; CXSW `dlp1438` is present at I²C0 `0x1b`; PrinterUI has a separate DLP/video output path | Physical data path and FPC mapping; mainline driver or a small output driver; pixel format, timing, synchronization, and error recovery |
+| Exposure display | Active path is H616 HDMI output at 540×2560 → RK628 HDMI RX at I²C2 `0x50` → MIPI DSI1 at 4 × 840 Mb/s; `dsi_err=0`. This matches PrinterUI's 1620-to-540 layer compression. The I²C0 `dlp1438` driver rejects this product (`-22`). | Physical FPC trace, exact pixel-to-column mapping, timing controls, layer synchronization, error recovery, and a mainline RK628/panel driver |
 | Control MCU | PrinterUI and the startup updater use `/dev/ttyS2`; application link is 115200 8N1; static command families and frame wrapper are documented in [the protocol map](protocols.md) | Full command/reply state machine, parameter units, image/exposure synchronization, and a passive wire trace |
 | Firmware update | The vendor startup script can toggle BOOT0/reset and call `stm32flash` to write the bundled Cortex-M image | Exact STM32 part/read-protection state and safe recovery behavior; do not use the update sequence as a test command |
 | Display userspace | Stock PrinterUI expects vendor interfaces including `/dev/disp` and `/dev/ion` | Replace/adapt these consumers for DRM/KMS and modern buffer allocation, or keep the vendor kernel while proving the ORA userspace stack |
@@ -31,7 +31,7 @@ The complete device and package notes are in [the hardware map](hardware-map.md)
 
 **A newer kernel is technically feasible at the SoC level, but a complete HALOT port is not demonstrated yet.** The upstream Linux tree has H616 device-tree support, including the H616 DE33 display mixer binding. That is evidence that the CPU and some standard peripherals can run with mainline drivers; it is not a board description for this printer or proof that the exposure panel is supported.
 
-The stock boot path uses a vendor U-Boot and Android-style kernel partitions. Before writing any boot or rootfs image, map the vendor `awuboot` update handler to the actual eMMC boot area, determine what image format the installed U-Boot accepts, identify the active environment copy, and establish a tested recovery route. These items remain unresolved in [the boot analysis](firmware-update.md).
+The stock boot path uses a vendor U-Boot and Android-style kernel partitions. The exact installed TOC1 U-Boot package is now located in the eMMC user area, and the normal environment path boots `p5` as an Android boot image. Before writing any boot or rootfs image, determine the precise sectors and redundant copies touched by the vendor `awuboot` handler, identify the active environment copy, and establish a tested recovery route. These items remain unresolved in [the boot analysis](firmware-update.md).
 
 The least invasive software milestone is to build an ORA-compatible backend for the ABI and libraries available in the existing rootfs, then run it from the writable overlay while leaving the stock kernel, boot partitions, STM32, and vendor UI recoverable. This isolates print-protocol and file-format work from mainline-kernel bring-up. It may still require a compatible binary target or a small rootfs for the host architecture.
 
@@ -48,8 +48,8 @@ On a newer kernel, the existing UI's vendor `/dev/disp` and `/dev/ion` assumptio
 ### 2. Complete the hardware/software interface map
 
 - Finish static analysis of the STM32 image and map protocol handlers, replies, parameters, homing, stop, UV, fans, and temperature behavior.
-- Recover PrinterUI's DLP buffer format, output API calls, timing, and image-to-exposure sequence.
-- Map the current operator display and the exposure display separately. The latter is the highest-risk unknown because the physical panel path has not been identified.
+- Reproduce PrinterUI's 1620-to-540 layer packing and confirm how RGB channels map to monochrome columns; capture image/output timing relative to STM32 exposure commands.
+- Keep the operator UI and exposure display as separate pipelines. The exposure route is traced through the RK628 to DSI1, while the physical panel FPC and exact pixel mapping remain open.
 - Capture only passive serial traffic first; do not probe by sending motion or UV commands during protocol discovery.
 
 ### 3. Build a host-side HALOT adapter
@@ -63,7 +63,7 @@ On a newer kernel, the existing UI's vendor `/dev/disp` and `/dev/ion` assumptio
 - Determine the stock userspace ABI, available runtime libraries, service manager, and graphics interfaces.
 - Build the backend for the actual target ABI; expose it as a service with explicit safe startup/shutdown behavior.
 - Test Orion on the operator display as a separate task. Keep the existing Creality UI launchable until the replacement is stable.
-- Do not direct exposure frames to `/dev/fb0` by assumption: that is the operator display path in the current snapshot, while the exposure path is separate and unresolved.
+- Keep the operator UI and exposure output separate: `/dev/fb0` is the 800×480 touch UI, while the current exposure path runs through the H616 HDMI output and RK628 DSI1 bridge.
 
 ### 5. Port the board to mainline Linux
 
@@ -87,4 +87,4 @@ The port is not ready for normal use until it can repeatedly:
 
 ## Overall assessment
 
-The host SoC is a reasonable Linux target and the STM32 control link is accessible from Linux. The port is feasible as a multi-layer integration project. The main unknowns are not CPU support: they are safe boot/recovery, the proprietary exposure-panel output path, and the full contract between Odyssey's layer engine and the HALOT controller. Start with the HALOT adapter and file/control path on the stock kernel; take on a newer kernel after the printer-specific display and recovery paths are understood.
+The host SoC is a reasonable Linux target and the STM32 control link is accessible from Linux. The port is feasible as a multi-layer integration project. The exposure stream is now traced through the H616 HDMI output and RK628 DSI1, but its channel-to-column mapping and full timing contract still need work. Safe boot/recovery and the full contract between Odyssey's layer engine and the HALOT controller remain major unknowns. Start with the HALOT adapter and file/control path on the stock kernel; take on a newer kernel after the printer-specific display and recovery paths are understood.

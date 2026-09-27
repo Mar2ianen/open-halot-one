@@ -28,7 +28,9 @@ The executable distinguishes `.cxdlp` and `.cxline` processing. `parseOnePicture
 
 `SerialPortPrintFile` uses `SendBgraImage` to submit a parsed layer. The `YuvDataSend` class has a dedicated `CreatevDlpOutport` initialization path and a `CreateVideoOutport` alternative. `sendImageDataToDlp` copies a `QImage` pixel buffer and submits it through the selected output object, retrying failed submissions. Other methods enable/disable the display output port, control light intensity, and wait for exposure completion.
 
-This is strong software evidence of a separate host-side image output used by the exposure workflow. The operator GUI itself uses `/dev/fb0` in 800×480 mode. The DLP-named outport API does not establish the panel's optical technology; Creality's product documentation identifies the exposure panel as monochrome LCD. The RK628 and `cxsw,dlp1438` device-tree nodes are present, but the binary's hardware path cannot be traced to a specific connector from this evidence.
+For the active CL60 profile, `halotMachine.xml` selects the generic `CreateVideoOutport` path rather than the model-dependent `CreatevDlpOutport` branch. `writerClearImage` reduces the 1620-pixel source width to 540 pixels before output; the frame is placed in an ION buffer and submitted through the `/dev/disp` display-layer API. Live kernel logs then show the matching 540×2560 signal arriving at the RK628 HDMI receiver, followed by successful DSI1 initialization at 840 Mb/s on four lanes. This correlates the PrinterUI layer path with the exposure display link at high confidence. The active path is distinct from the 800×480 `/dev/fb0` operator GUI.
+
+The printer's product documentation identifies the exposure panel as a monochrome LCD. The DLP-named outport function is only a software/backend name; it does not mean the optical panel is DLP. The I²C0 `cxsw,dlp1438` node is not the active route on this CL60: its driver probe logs `device not the CD60` and exits with `-22`. The remaining unverified details are the bridge's exact RGB-to-monochrome pixel mapping and the physical DSI1-to-panel FPC trace.
 
 ## Other software paths
 

@@ -44,21 +44,26 @@ If no update is required, the script simply resets the MCU through PA0. This is 
 
 ## Main SoC boot and eMMC layout
 
-The captured environment includes U-Boot `2018.05`, `bootdelay=0`, and these boot commands:
+The live environment is readable through `fw_printenv`; `/etc/fw_env.config` points to the redundant environment partitions `env` and `env-redund` at offset `0`, with `0x20000` bytes in each. The running U-Boot reports version `2018.05`, `bootdelay=0`, `boot_partition=boot`, and `bootcmd=run setargs_nand boot_normal`. The active boot commands are:
 
 ```text
+setargs_nand=... root=${nand_root} ...
 boot_normal=sunxi_flash read 45000000 ${boot_partition};bootm 45000000
 boot_recovery=sunxi_flash read 45000000 recovery;bootm 45000000
 boot_fastboot=fastboot
 ```
 
+Thus the current normal path selects the `boot` GPT partition (`/dev/mmcblk0p5`), loads it at `0x45000000`, and calls `bootm`. The kernel command line confirms `root=/dev/mmcblk0p6`. With `bootdelay=0`, an interactive U-Boot prompt is not offered through the ordinary delay window; no alternate key or UART interruption path has been tested. The environment was read only.
+
 The same environment capture lists fastboot key values `0x02–0x08` and recovery key values `0x10–0x13`; the physical key-to-value mapping and which copy of the redundant environment is active were not tested. These are captured configuration strings, not proof that a particular key sequence works.
 
-The Linux GPT label for `p1` is `bootloader`, but the captured partition is FAT16 with boot-logo assets and `magic.bin`. `p2`/`p3` hold boot-environment copies; `p4` is an Android boot image for recovery; `p5` is an Android boot image for the normal kernel; `p6` is the read-only SquashFS rootfs; `p7` is the writable ext4 overlay. The separate 4 MiB `boot0` and `boot1` captures are byte-identical, but their executable contents have not been identified. RPMB was not read.
+The downloaded `uboot` member is a 1,294,336-byte Allwinner TOC1 package (`SHA-256 75b7f37ad259842c72c505b4ec2289a426b819004298799c4b15bbf24a7544c4`). Its TOC lists `u-boot` (1 MiB), `monitor` (0x182d0 bytes), `dtbo` (0x11c0 bytes), and `dtb` (0x20600 bytes). A byte-for-byte comparison found the complete package in the captured eMMC user area at byte offset `0x01004000` (decimal 16,793,600); it ends at `0x0113c000`, before `p1` begins at `0x02400000`. The package's embedded U-Boot version matches the running `2018.05-g14fbabb0` version. This confirms the installed package contents and location in this snapshot. It does not reveal which exact sectors or boot copies the `awuboot` handler writes during an update.
+
+The raw user-area prefix also contains Allwinner BOOT0/SPL strings (`u-boot` at offset `0x0000c635` and `HELLO! BOOT0 is starting!` at `0x0000c65c`); their image boundaries and the BootROM's exact selection path are not yet established. The separate 4 MiB eMMC hardware-area captures `boot0` and `boot1` are both entirely zero-filled, and Linux reports both devices read-only (`ro=1`). Therefore the executable U-Boot package observed here is in the user area, not those two hardware areas. `p1` is FAT16 with boot-logo assets and `magic.bin`, despite its GPT label `bootloader`; `p2`/`p3` hold the redundant U-Boot environments; `p4` is recovery; `p5` is the normal kernel boot image; `p6` is the read-only SquashFS rootfs; and `p7` is the writable ext4 overlay. RPMB was not read.
 
 ## Could a custom, newer kernel boot?
 
-**Technically plausible, not yet demonstrated.** This unit has root access, a readable eMMC partition map, and a vendor update plan that directly installs an Android boot image and rootfs. U-Boot's captured normal path reads the selected boot partition and calls `bootm`. Those facts provide a concrete route for a custom kernel/rootfs image.
+**Technically plausible, not yet demonstrated.** This unit has root access, a readable eMMC partition map, a vendor update plan that directly installs an Android boot image and rootfs, and a live U-Boot environment that boots `p5` through `bootm`. Those facts identify where a replacement boot image would need to land. They do not prove that an arbitrary image will boot or that a recovery path will work.
 
 The H616 is represented in the upstream Linux tree, including its SoC device tree and peripheral drivers ([upstream H616 DTS](https://github.com/torvalds/linux/blob/master/arch/arm64/boot/dts/allwinner/sun50i-h616.dtsi)). That establishes SoC-level mainline support, not a ready-to-boot HALOT-ONE image. A newer kernel still needs the correct board device tree, storage/PMIC configuration, boot-image packaging compatible with this U-Boot, and working printer display, touch, RK628, and CXSW-specific paths. The existing Qt UI also expects vendor interfaces such as `/dev/disp` and `/dev/ion`.
 

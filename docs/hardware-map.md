@@ -18,24 +18,24 @@ flowchart LR
   L[5.96-inch monochrome
   resin exposure LCD]
   R[Rockchip RK628
-  I2C2 0x50; active driver]
+  I2C2 0x50; HDMI-RX to DSI1]
   D[CXSW DLP1438 DT node
-  I2C0 0x1b; GPIO status signals]
+  I2C0 0x1b; probe rejected]
   H -->|Allwinner display engine / fb0| T
   C -->|I2C; input event2| H
-  H -.->|PrinterUI holds /dev/ttyS2;
-  likely control UART, board endpoint untraced| M
-  H -.->|PrinterUI creates vDlp outport
-  and sends image frames| L
-  H -.->|I2C2 0x50| R
-  R -.->|video bridge destination TBD| L
-  H -.->|power, spi_ready, print_status signals| D
+  H -->|/dev/disp HDMI output;
+  active input 540x2560| R
+  R -->|HDMI RX to MIPI DSI1;
+  4 lanes at 840 Mb/s| L
+  H -.->|UART2 /dev/ttyS2;
+  MCU software path confirmed| M
+  H -.->|I2C0 0x1b;
+  driver rejects this product| D
   M --> Z
   M --> U
-  M -->|LCD resin panel connector| L
 ```
 
-The solid display path is supported by the live framebuffer and flattened device tree. The app binary separately creates a `vDlp` image output port for layer frames, which is the leading software path for exposure images; its physical endpoint is untraced. Dashed links mark observed interfaces whose board destination is not proven. Creality's replacement-board listing identifies an STM32 and A4988, but the silkscreen on this individual printer has not been photographed.
+The operator-screen path is the H616 display engine's `lcd0`/`fb0` output. The live kernel log confirms a second active path: H616 HDMI output at 540×2560, RK628 HDMI receive, then RK628 MIPI DSI1 at four 840 Mb/s lanes. This mode matches PrinterUI's 1620-to-540 compressed layer width. The internal board HDMI routing and final panel FPC were not inspected physically, so those board-level connections remain inferred from the active signal and software profile. The DLP-named image backend is a model-dependent app branch, not evidence that the CL60 uses a DLP panel. Creality's replacement-board listing identifies an STM32 and A4988, but the silkscreen on this individual printer has not been photographed.
 
 ## Display 1: operator touchscreen
 
@@ -44,17 +44,19 @@ The solid display path is supported by the live framebuffer and flattened device
 - Live OS observation: `/dev/fb0` reports `800x480p-59`, 32 bits per pixel, virtual size `800x960`. The flattened device tree has enabled Allwinner `lcd0`, active size `800x480`, physical dimensions `108x65 mm`, 30 MHz pixel clock, and the `rgb24` pin group. This supports the H616-to-RGB operator-panel path; board-level connector pin numbers have not been traced.
 - Live OS observation: input device `cxsw_ctp` is attached to I²C bus 3 at address `0x38` and appears as `/dev/input/event2`.
 - While PrinterUI was running, its open file descriptors included `/dev/fb0`, `/dev/disp`, `/dev/ion`, `/dev/mali0`, `/dev/input/event2`, and `/dev/ttyS2`.
-- Ghidra pseudocode shows `YuvDataSend::init()` creating a `CreatevDlpOutport` backend and `sendImageDataToDlp()` copying image pixels to that output path. `SerialPortPrintFile` passes layer images through `SendBgraImage`. The connection from this software output port to a physical FPC has not been traced.
+- `SerialPortPrintFile` passes layer images through `SendBgraImage`. The active CL60 profile selects the generic `CreateVideoOutport`/ION display path; PrinterUI reduces the 1620-pixel source width to 540 pixels. The other `CreatevDlpOutport` branch is model-dependent.
 - The I²C binding identifies the touch controller driver name, but not the exact chip vendor/model.
 
 ## Display 2: resin exposure panel
 
 - Published HALOT-ONE specification: 5.96-inch monochrome LCD, 1620x2560 pixels; exposure wavelength is 405 nm.
 - The user manual labels a separate motherboard connection `LCD resin panel` / `printing screen port`.
-- Device tree and sysfs identify an I²C node `compatible = "cxsw,dlp1438"` at bus 0, address `0x1b`. Its board properties are named `power`, `spi_ready`, and `print_status`; no bound I²C driver appeared in sysfs during inspection. These names suggest a display-controller or readiness interface but do not prove the FPC/data path.
-- A second node `compatible = "rockchip,rk628"` at I²C2 address `0x50` is bound to the `rk628` kernel driver. Rockchip describes RK628D as a video bridge with multiple display interfaces, but the unit's DT does not expose a confirmed endpoint from it to the exposure LCD. Its exact role remains open.
-- The printer's product documentation calls this a monochrome LCD exposure panel. The `DLP1438` compatible string is a controller/node label and must not be read as proof that the optical panel is DLP technology.
-- The exact panel vendor, FPC pinout, timing/data interface, and the division of work between the H616, RK628, CXSW node, and STM32 remain open questions.
+- Live kernel log: H616 HDMI output is enabled; RK628 at I²C2 `0x50` detects an HDMI input of 540×2560 (74.25 MHz), configures a 540×2560 destination (80.035 MHz), and initializes DSI1 at 840 Mb/s × 4 lanes. The RK628 sysfs `dsi_err` counter reads `0`. This establishes the active video bridge path at the Linux/display-link level.
+- The loaded RK628 driver module contains a product-screen table entry `CL60R channel=0 type=1`; the live driver log reports the same product, channel, and type. This confirms which driver profile is selected, but the `type=1` value has not been mapped to a panel vendor or a specific init-sequence table.
+- PrinterUI's CL60 image path produces a 540×2560 stream from 1620×2560 layer data, a 3:1 horizontal compression. The matching live RK628 input mode strongly identifies this as the exposure-image stream. The exact RGB-channel-to-monochrome-pixel mapping inside the bridge/panel is still unverified.
+- The I²C0 node `compatible = "cxsw,dlp1438"` at `0x1b` is present in the device tree but its driver probe logs `device not the CD60` and fails with `-22`; no driver is bound. Its `power`, `spi_ready`, and `print_status` properties therefore do not establish an active CL60 display route.
+- RK628 sysfs exposes `lcd_timing`, `lane_rate`, `dsi_enable`, `hdmi_out_enable`, and `dsi_err`. The first four return `EIO` on read in this firmware; `dsi_err` returns `0`. No values were written to those controls.
+- The exact panel vendor, physical FPC pinout, and board-level trace from the RK628 DSI1 pads to the exposure panel remain unconfirmed because the printer has not been opened.
 
 ## Printer-control board and actuators
 
@@ -77,8 +79,8 @@ The downloaded rootfs includes an STM32 updater and `V1-01.bin`, confirming a di
 
 | Bus/device | Live name | Current interpretation |
 |---|---|---|
-| I²C 0, `0x1b` | `cxsw,dlp1438` | DT node has `power`, `spi_ready`, `print_status`; no bound I²C driver observed; exposure-screen role plausible, physical route TBD |
-| I²C 2, `0x50` | `rockchip,rk628` | Bound to `rk628`; video-bridge family, connection to either panel TBD |
+| I²C 0, `0x1b` | `cxsw,dlp1438` | DT node exists; probe rejects product as `not the CD60` (`-22`); no bound driver |
+| I²C 2, `0x50` | `rockchip,rk628` | Bound to `rk628`; live HDMI-RX 540×2560 to DSI1, 4 × 840 Mb/s; active exposure-image route with high confidence |
 | I²C 3, `0x38` | `cxsw_ctp` | Touch input controller; `/dev/input/event2` |
 | I²C 5, `0x36` | `axp806` | Power-management IC driver name |
 | UART | `ttyS0`, `ttyS1`, `ttyS2` | `ttyS0` is the Linux console; PrinterUI and the STM32 updater use `/dev/ttyS2` for the control path; physical endpoint, connector, signal level, and MCU pins remain untraced |

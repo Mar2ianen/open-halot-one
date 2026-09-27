@@ -26,7 +26,15 @@ The user area is eMMC `/dev/mmcblk0`, 7,636,800 KiB. The start and size values b
 | `p9` | private | 824,320 | 32,768 | VFAT mounted at `/device` (16 MiB) |
 | `p10` | UDISK | 857,088 | 14,416,479 | ext4 mounted at `/mnt/UDISK` (6.6 GiB) |
 
-The eMMC device also exposes separate `boot0` and `boot1` hardware areas. Their 4 MiB captures are byte-identical, but their code/content has not yet been identified. RPMB was not read. The update bundle contains an Allwinner TOC1 U-Boot package; its `awuboot` handler's exact destination has not been confirmed.
+The separate 4 MiB eMMC hardware areas `boot0` and `boot1` were captured and are entirely zero-filled; both are read-only while Linux runs. Comparing the vendor TOC1 member against the full user-area snapshot found an exact package copy at byte offset `0x01004000` in the reserved area before `p1`. Its embedded U-Boot version matches the running `2018.05-g14fbabb0`. The first-stage BOOT0/SPL strings also occur in the user-area prefix. The SWUpdate `awuboot` handler's precise write procedure and the BootROM selection rules remain unknown; see [firmware and boot path](firmware-update.md). RPMB was not read.
+
+## Live display pipeline
+
+- The operator touchscreen is the Allwinner `lcd0` framebuffer at `/dev/fb0`: `U:800x480p-59`, 32 bits per pixel, virtual size `800x960`. The touch controller remains the separate I²C3 `0x38` input device.
+- The active exposure stream appears separately at the H616 HDMI output. Kernel logs show the RK628 HDMI receiver at I²C2 `0x50` detecting 540×2560 input at 74.25 MHz and configuring 540×2560 output at 80.035 MHz.
+- RK628 successfully initializes MIPI DSI1 at four lanes, 840 Mb/s per lane; `/sys/devices/virtual/rk628_class/rk628/attr/dsi_err` reads `0`. The kernel creates `/dev/rk628` (character device 242:0). `lcd_timing`, `lane_rate`, `dsi_enable`, and `hdmi_out_enable` sysfs nodes exist but return `EIO` when read in this firmware; they were not written.
+- The 540-pixel active width matches PrinterUI's 3:1 compression of the 1620-pixel layer width. That ties the image pipeline to the RK628/DSI path with high confidence. The exact RGB channel packing into monochrome panel columns and the physical DSI FPC route are not yet known.
+- A separate I²C0 `0x1b` device-tree node advertises `cxsw,dlp1438`, but its probe reports `device not the CD60` and exits with `-22`; no driver binds. Do not treat that node as the working CL60 exposure path.
 
 ## Runtime services observed
 

@@ -14,6 +14,10 @@ This page separates the Linux-to-controller serial protocol, the STM32 applicati
 
 The `CD60` and `D160` product branches select `/dev/ttyS3`; the other branch selects `/dev/ttyS2`. The inspected unit reports `CL60`.
 
+## Control UART versus layer-image path
+
+The UART is the STM32 control/status channel: it carries the ASCII-like commands and line replies described below. CL60 layer bitmaps use a separate H616 video-output path. PrinterUI's active profile creates the generic `CreateVideoOutport`/ION backend, transforms the 1620×2560 source layer to 540×2560, and the running kernel shows that mode entering the RK628 HDMI receiver before MIPI DSI1. Thus the large exposure bitmap is not framed into the 100-byte UART command protocol. The exact in-memory pixel packing and conversion into monochrome panel columns remain open.
+
 ## PrinterUI serial framing
 
 The normal `CXSerial::SendMsgToSerial` path constructs a fixed 100-byte ASCII body and appends line feed (`0x0a`):
