@@ -12,7 +12,7 @@ Hardware and firmware research notes for the Creality HALOT-ONE (CL-60). This is
 - While running, PrinterUI held `/dev/ttyS2`, `/dev/fb0`, `/dev/disp`, and touch input open. The firmware updater also selects `/dev/ttyS2` for the STM32 control path. PrinterUI uses 115200 8N1 without flow control; the cable, voltage, and MCU pin mapping still need physical tracing.
 - The second display path exposes `cxsw,dlp1438` at I²C0 `0x1b` with `power`, `spi_ready`, and `print_status` properties, plus an active Rockchip RK628 bridge on I²C2 `0x50`. Which component drives the exposure LCD and how the FPC is wired remain unresolved.
 
-Evidence labels in the docs distinguish direct device observations, published specifications, and inferences. See [the hardware map](docs/hardware-map.md), [software map](docs/software-map.md), [UART and STM32 protocol map](docs/protocols.md), [firmware/update and boot analysis](docs/firmware-update.md), [PrinterUI analysis](docs/printerui-analysis.md), and [snapshot notes](docs/system-snapshot.md).
+Evidence labels in the docs distinguish direct device observations, published specifications, and inferences. See [the hardware map](docs/hardware-map.md), [software map](docs/software-map.md), [UART and STM32 protocol map](docs/protocols.md), [firmware/update and boot analysis](docs/firmware-update.md), [ORA port plan](docs/ora-port-plan.md), [PrinterUI analysis](docs/printerui-analysis.md), and [snapshot notes](docs/system-snapshot.md).
 
 ## Data handling
 
