@@ -16,7 +16,7 @@ flowchart LR
     H --> R[RK628 receiver, I²C2 0x50]
     R --> M[MIPI DSI1, 4 lanes]
     M --> L[Monochrome exposure LCD]
-    U[STM32 control UART: M678/status] -. separate control path .-> P
+    U[STM32 control UART: M678/status] -. layer/motor control .-> P
 ```
 
 The last panel node is the product's monochrome exposure LCD. The route from the RK628 through DSI1 is confirmed by the live device tree and kernel logs. The exact panel connector pinout and the bridge's final physical column mapping have not been probed.
@@ -64,24 +64,33 @@ The statically recovered `libuapi` backend:
 
 Live kernel output independently shows H616 HDMI at 540×2560 reaching the RK628 at I²C2 address `0x50`, then MIPI DSI1 initialized with four lanes at 840 Mb/s each. The I²C0 `cxsw,dlp1438` path is not active for this unit; its probe rejects the product. The operator GUI is separate: it uses `/dev/fb0` at 800×480 RGB24.
 
-The recovered layer loop has separate display-result and MCU-control paths. PrinterUI submits the frame with `SendBgraImage`. In the active print call path, `waitExposureResult` polls `waitExposureEnd` about every 220 ms while the backend returns code `4`; code `2` causes one retry after a one-second delay, and `doExposure` treats code `5` as success. The similarly named `waitExposureFinished` method exists, but its backend calls do not by themselves establish a vblank or frame-complete event, and it is not the active `doExposure` polling call identified in the main CL60 path. The precise meaning and producer of these result codes remain unresolved.
+The image path and MCU layer-control path are separate. In the active CL60 configuration, `SerialPortPrintFile::run` dispatches to `lcdPrint` and that function does not call `waitExposureResult`, `waitExposureEnd`, or `doExposure`. The DLP-oriented paths do call these helpers: `waitExposureResult` (`0x0027e6f4`) polls `waitExposureEnd` (`0x001c0248`), which reaches `YuvDataSend::waitExposureFinished` (`0x00211f64`). This method always dispatches through a separate DLP handle, not the generic Video handle used by CL60. In the DLP backend, vtable slots `+0x1c` and `+0x24` read print status and total frames; the driver obtains a 9-byte reply from the DLP I²C device, with status at byte 0, total-frame count at bytes 5–6, and exposed-frame count at bytes 7–8. The status getter reads the chip-specific `dlp_status` sysfs attribute. The wrapper polls about every 220 ms while the returned status is `4`, retries once after a one-second delay for `2`, and the DLP exposure path accepts `5` as success. These codes and this status path describe the alternate DLP backend; they are not evidence of CL60 frame completion.
 
-Separately, the UI sends `M678` over UART, waits for its matching reply and motor status, then polls `M114` before calling `openLight` (`M42 P36 M1 S0`). The STM32's M678 worker sets the event bit that M114 can consume as `M114_DELATLIGHT_OVER`. This strongly suggests an MCU phase gate before light-on, but no passive layer trace has confirmed the exact reply accepted by PrinterUI. The MCU status replies do not report the display backend's exposure completion.
+For CL60, `lcdPrint` queues the decoded frame, sends its prepared `M678` layer command over UART, waits for the matching reply, then calls `WaitMotorStatus` before advancing. The helper sends framed `M114` queries about every 220 ms while its polling flag is clear, but its only accepted returned string is byte-for-byte `M114 ` (including the trailing space). The CXSerial parser maps raw `M114_DELATLIGHT_OVER` to `_DELATLIGHT_OVER\n`, which fails that filter and exact comparison. No layer UART trace establishes which response makes the polling helper succeed. The LCD loop does not call `openLight`; the STM32 worker's actual light timing remains unmapped. The DLP-specific `doExposure` path sends `M114`, then calls `openLight` (`M42 P36 M1 S0`), and subsequently polls the DLP output status.
+
+### `/dev/disp` queue and synchronization
+
+The active userspace call submits a layer configuration, not the image bytes, through `/dev/disp` ioctl `0x47`. The libuapi wrapper builds a one-record request; kernel `disp_ioctl` accepts up to 16 records and copies each 184-byte configuration into kernel staging memory before dispatching it to the selected display manager. The BGRA bytes are already in the external ION-mapped buffer referenced by the layer's plane address.
+
+The kernel has display RCQ enabled. The VSYNC IRQ path updates scanline/timing counters and wakes a thread that emits a uevent, but the recovered call chain does not show it applying the queued layer configuration or completing the userspace ioctl at VSYNC. `disp_mgr_sync` returns early with RCQ enabled, and `disp_al_manager_sync` is a stub in this build. Register updates are visible on force-apply/enable paths, not as a demonstrated per-frame VSYNC commit. Therefore the exact point at which a newly queued exposure frame becomes visible, and whether the change is atomic at a frame boundary, remain unresolved.
+
+For the active CL60 frame, PrinterUI supplies dimensions 540×2560, format `0x0e`, and alignment/stride field `0`. `libuapi` maps that format to kernel format `0x43`, which the display engine classifies as 32 bits per pixel. The active layer setup passes width into the driver; with alignment field zero, the driver's pitch calculation is dense: `540 × 4 = 2160` bytes per row. The complete output frame is `2160 × 2560 = 5,529,600` bytes, exactly the userspace conversion/copy length. This establishes the submitted buffer's stride; it does not identify the bridge's internal sampling or physical panel column mapping.
 
 ### Backend alternatives not selected by CL60
 
 The `CreatevDlpOutport` backend is present for other product profiles but is not selected by the active CL60 configuration. Its `vDlpOutDisplay` method builds a 10-byte header (`04 60 02 00 F1 00 00 40 38 00`), appends the image and a big-endian CRC16 computed over header plus payload (initial value `0`, polynomial `0x1021`, no reflection/final XOR), then performs ioctl `0x40016bc8`, `write`, and ioctl `0x40016bc9`. A separate `vDlpOutSendPhoto` path uses CRC16-CCITT-FALSE initialized to `0xffff` over the payload only, and writes the packet without that ioctl pair. These are recovered alternative backend protocols, not the active CL60 panel transport.
 
-### Frame storage sizes and unresolved stride
+### Frame storage sizes and stride
 
-For the active compressed profile, the one-byte source frame contains `1620 × 2560 = 4,147,200` bytes. The converted `540 × 2560` BGRA buffer contains `5,529,600` bytes; tightly packed output rows are `540 × 4 = 2,160` bytes. The conversion and copy sizes support this dense layout, but PrinterUI's code does not use `QImage::bytesPerLine()` in the reviewed copy path. The actual display driver's scanout stride/alignment is therefore not confirmed by this userspace analysis.
+For the active compressed profile, the one-byte source frame contains `1620 × 2560 = 4,147,200` bytes. The converted `540 × 2560` BGRA buffer contains `5,529,600` bytes with a confirmed dense output pitch of 2,160 bytes per row. The alignment field is explicitly zero in this call path, so the kernel's optional pitch-rounding branch is not used. This conclusion comes from the active userspace layer descriptor and the matching format/pitch calculation in the display driver.
 
 ## Remaining physical evidence
 
 - Trace the DSI1 FPC from the RK628 to the exposure panel and record connector orientation/pin mapping.
 - Determine the panel's actual row/column address direction and channel-to-column order using a known test image or passive DSI capture.
 - Locate the point where `MirroredX=true` is applied in the image parser or display pipeline.
-- Identify the producer and exact meaning of display result codes 2, 4, and 5, and whether any backend/kernel wait corresponds to frame completion or vblank.
-- Confirm scanout stride/alignment from the `/dev/disp` driver and identify whether the queued layer change takes effect at a frame boundary.
+- Determine the exact meaning of DLP result codes 2, 4, and 5, and whether the DLP backend/kernel wait corresponds to frame completion or vblank.
+- Recover the effective runtime DSI timing override state; the compiled CL60R/type-1 default is 540×2560 at 112 MHz, but the corresponding sysfs read returns `EIO`.
+- Identify whether the queued layer change takes effect atomically at a frame boundary; the ioctl/RCQ path does not expose a confirmed userspace VSYNC wait.
 
 No test bitmap was displayed and no light, motor, or STM32 command was triggered for this analysis.
