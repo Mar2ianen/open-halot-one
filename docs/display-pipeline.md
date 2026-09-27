@@ -59,18 +59,29 @@ The statically recovered `libuapi` backend:
 
 1. Opens `/dev/disp` read/write and obtains display dimensions with ioctls `7` and `8`.
 2. Requests a display layer and initializes its configuration through ioctl `0x47`.
-3. Allocates display memory through the Sunxi ION adapter. `DispWriteData` copies the frame into one of two buffers, flushes the written range, and submits the updated layer configuration through ioctl `0x47`.
-4. Lets PrinterUI enable or disable the layer through backend calls. The exposure wait function calls backend synchronization/status methods and checks a result value; the exact virtual-method names and the RK628's frame-complete signal are not resolved.
+3. Allocates one display buffer through the Sunxi ION adapter for the active PrinterUI path. It copies the converted frame into that buffer, synchronizes the written range for display, and submits the layer configuration through `DispQueueToDisplay` (vtable slot `+0x10`), which uses ioctl `0x47`.
+4. PrinterUI sets layer z-order to `1` (slot `+0x24`) and enables the layer (slot `+0x14`). The generic backend also exposes `DispWriteData` (slot `+0x08`), but the active CL60 path queues the layer directly and does not call that method. The active path does not show alternating frame buffers.
 
 Live kernel output independently shows H616 HDMI at 540×2560 reaching the RK628 at I²C2 address `0x50`, then MIPI DSI1 initialized with four lanes at 840 Mb/s each. The I²C0 `cxsw,dlp1438` path is not active for this unit; its probe rejects the product. The operator GUI is separate: it uses `/dev/fb0` at 800×480 RGB24.
 
-The recovered layer loop has two independent synchronization channels. PrinterUI submits the frame with `SendBgraImage`, and it uses the display backend's `waitExposureFinished` result to decide when the exposure has completed. Separately, it sends `M678` over UART, waits for the matching reply and motor status, then polls `M114` before calling `openLight` (`M42 P36 M1 S0`). The STM32's M678 worker sets the event bit that M114 can consume as `M114_DELATLIGHT_OVER`. This strongly suggests an MCU phase gate before light-on, but no passive layer trace has confirmed the exact reply accepted by PrinterUI. The MCU status replies do not report the display backend's exposure completion.
+The recovered layer loop has separate display-result and MCU-control paths. PrinterUI submits the frame with `SendBgraImage`. In the active print call path, `waitExposureResult` polls `waitExposureEnd` about every 220 ms while the backend returns code `4`; code `2` causes one retry after a one-second delay, and `doExposure` treats code `5` as success. The similarly named `waitExposureFinished` method exists, but its backend calls do not by themselves establish a vblank or frame-complete event, and it is not the active `doExposure` polling call identified in the main CL60 path. The precise meaning and producer of these result codes remain unresolved.
+
+Separately, the UI sends `M678` over UART, waits for its matching reply and motor status, then polls `M114` before calling `openLight` (`M42 P36 M1 S0`). The STM32's M678 worker sets the event bit that M114 can consume as `M114_DELATLIGHT_OVER`. This strongly suggests an MCU phase gate before light-on, but no passive layer trace has confirmed the exact reply accepted by PrinterUI. The MCU status replies do not report the display backend's exposure completion.
+
+### Backend alternatives not selected by CL60
+
+The `CreatevDlpOutport` backend is present for other product profiles but is not selected by the active CL60 configuration. Its `vDlpOutDisplay` method builds a 10-byte header (`04 60 02 00 F1 00 00 40 38 00`), appends the image and a big-endian CRC16 computed over header plus payload (initial value `0`, polynomial `0x1021`, no reflection/final XOR), then performs ioctl `0x40016bc8`, `write`, and ioctl `0x40016bc9`. A separate `vDlpOutSendPhoto` path uses CRC16-CCITT-FALSE initialized to `0xffff` over the payload only, and writes the packet without that ioctl pair. These are recovered alternative backend protocols, not the active CL60 panel transport.
+
+### Frame storage sizes and unresolved stride
+
+For the active compressed profile, the one-byte source frame contains `1620 × 2560 = 4,147,200` bytes. The converted `540 × 2560` BGRA buffer contains `5,529,600` bytes; tightly packed output rows are `540 × 4 = 2,160` bytes. The conversion and copy sizes support this dense layout, but PrinterUI's code does not use `QImage::bytesPerLine()` in the reviewed copy path. The actual display driver's scanout stride/alignment is therefore not confirmed by this userspace analysis.
 
 ## Remaining physical evidence
 
 - Trace the DSI1 FPC from the RK628 to the exposure panel and record connector orientation/pin mapping.
 - Determine the panel's actual row/column address direction and channel-to-column order using a known test image or passive DSI capture.
 - Locate the point where `MirroredX=true` is applied in the image parser or display pipeline.
-- Recover exact frame/vsync synchronization semantics from the backend and kernel driver.
+- Identify the producer and exact meaning of display result codes 2, 4, and 5, and whether any backend/kernel wait corresponds to frame completion or vblank.
+- Confirm scanout stride/alignment from the `/dev/disp` driver and identify whether the queued layer change takes effect at a frame boundary.
 
 No test bitmap was displayed and no light, motor, or STM32 command was triggered for this analysis.
