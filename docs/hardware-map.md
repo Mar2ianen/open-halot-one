@@ -30,8 +30,8 @@ flowchart LR
   active input 540x2560| R
   R -->|HDMI RX to MIPI DSI1;
   4 lanes at 840 Mb/s| L
-  H -.->|UART2 /dev/ttyS2;
-  MCU software path confirmed| M
+  H -.->|Allwinner UART2 /dev/ttyS2;
+  likely STM32 USART1 application path| M
   H -.->|I2C0 0x1b;
   driver rejects this product| D
   M --> Z

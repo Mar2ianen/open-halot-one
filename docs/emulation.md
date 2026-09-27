@@ -4,7 +4,7 @@
 
 The official update archive `V1_H2.303.1a2.303.1_C2.302.4_R2.302.1.tar.gz` contains an SWU with a 111,935,488-byte SquashFS root filesystem. Its executables, including `PrinterUI`, are 32-bit ARM EABI5 hard-float (`armhf`), not AArch64. This is the userspace running on Tina Linux; the printer's H616 board and vendor kernel remain separate parts of the system.
 
-The extracted rootfs and PrinterUI were run under QEMU ARM user-mode in a disposable, network-isolated container. The application loaded its Qt EGLFS/Mali platform integration, attempted `/dev/mali0`, then aborted because the Mali kernel driver/device node is absent. The trace did not reach a usable display or UART session. This confirms the userspace architecture and some startup choices, but it does not emulate the H616, its display engine, ION, RK628, or the printer peripherals.
+The extracted rootfs and PrinterUI were run under QEMU ARM user-mode in a disposable, network-isolated container. The application loaded its Qt EGLFS/Mali platform integration, attempted `/dev/mali0`, then aborted because the Mali kernel driver/device node is absent. This Qt build has no `libqoffscreen.so`; selecting `QT_QPA_PLATFORM=offscreen` therefore also aborts. `QT_QPA_PLATFORM=linuxfb` gets past Mali initialization but then lacks `/dev/fb0`; the experiment also ran outside the target root mount, so its `/mnt/UDISK/cxpmRunning.log` failure is not a target-system behavior. None of these launches reached a usable UART session. These results explain why host-side UI execution is not needed for the MCU protocol reverse: the controller binary can be disassembled directly, and the protocol framing is now recovered from its USART1 receive path. QEMU user-mode still does not emulate the H616 display engine, ION, RK628, or printer peripherals.
 
 ## STM32 control image
 
@@ -24,6 +24,12 @@ Renode `1.16.1.16973` provides an [STM32F103 Cortex-M3 platform](https://github.
 With those fixtures the image clears its RCC startup waits and configures serial DMA before continuing into application code. The observed configuration is consistent with USART1 RX on DMA1 channel 5 (200-byte buffer at `0x20000578`), USART2 RX on channel 6 (200-byte buffer at `0x200007d0`), and USART2 TX on channel 7 (data register `0x40004404`, buffer at `0x20000640`). USART2's CR3 is written with `0xc0` (DMAT and DMAR). This is register-configuration evidence from CPU execution, not a captured UART byte stream. The memory-backed DMA registers do not move bytes, raise transfer-complete flags, or model request timing, so this run cannot validate the protocol or show that these channels complete a transfer.
 
 A five-second virtual-time run progressed beyond this setup; a sampled PC landed in a bytewise string-comparison routine. Because DMA, Flash wait states, and peripheral timing are still incomplete, that PC sample is not enough to identify the main-loop state. No command replies or image payloads have been generated in Renode.
+
+### Static UART interrupt and frame-path disassembly
+
+Disassembly of the shipped `V1-01.bin` resolves the command receive path without relying on GPU or MCU emulation. The vector table points USART1, USART2, and USART3 to handlers at `0x08003078`, `0x080031a0`, and `0x0800321c`; DMA1 channel7 has a custom handler at `0x08001252`. The USART handlers use selector `0x424` with a helper at `0x080033f8` that checks the USART `CR1.IDLEIE` enable and `SR.IDLE` flag. USART1's IDLE path rearms DMA1 channel5 and copies `200 - CNDTR` bytes from `0x20000578` into the command mailbox at `0x200004b0`.
+
+The consumer at `0x08006ddc` checks `mailbox[99] == 0x55` before calling the dispatcher at `0x08005510`; the dispatcher tokenizes the command at `0x080041f0`. This matches PrinterUI's 100-byte body ending in four `0x55` bytes, followed by LF. Static code therefore establishes the software-side frame marker and dispatch path. It still does not provide a live MCU UART transcript, test DMA timing, or identify the physical board pins. See [the protocol map](protocols.md) for the complete receive sequence and limits.
 
 ## Launch-time `strace` on the printer
 
