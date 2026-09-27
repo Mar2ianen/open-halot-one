@@ -26,7 +26,7 @@ The user area is eMMC `/dev/mmcblk0`, 7,636,800 KiB. The start and size values b
 | `p9` | private | 824,320 | 32,768 | VFAT mounted at `/device` (16 MiB) |
 | `p10` | UDISK | 857,088 | 14,416,479 | ext4 mounted at `/mnt/UDISK` (6.6 GiB) |
 
-The separate 4 MiB eMMC hardware areas `boot0` and `boot1` were captured and are entirely zero-filled; both are read-only while Linux runs. Comparing the vendor TOC1 member against the full user-area snapshot found an exact package copy at byte offset `0x01004000` in the reserved area before `p1`. Its embedded U-Boot version matches the running `2018.05-g14fbabb0`. The first-stage BOOT0/SPL strings also occur in the user-area prefix. The SWUpdate `awuboot` handler's precise write procedure and the BootROM selection rules remain unknown; see [firmware and boot path](firmware-update.md). RPMB was not read.
+The separate 4 MiB eMMC hardware areas `boot0` and `boot1` were captured and are entirely zero-filled; both are read-only while Linux runs. Comparing the vendor TOC1 member against the full user-area snapshot found an exact package copy at byte offset `0x01004000` in the reserved area before `p1`. Static reversal shows that SWUpdate's `awuboot` path clears 1 MiB at `0x012a6000`, then writes the package at sector `0x8020` (`0x01004000`); the first region's role is unknown. The package's embedded U-Boot version matches the running `2018.05-g14fbabb0`. The first-stage BOOT0/SPL strings also occur in the user-area prefix, but BootROM selection rules remain unknown; see [firmware and boot path](firmware-update.md). RPMB was not read.
 
 ## Live display pipeline
 
