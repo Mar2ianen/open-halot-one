@@ -1,0 +1,99 @@
+# Related Creality resin platforms and open firmware
+
+Research snapshot: 2026-09-28. This page compares the HALOT-ONE CL-60 evidence collected in this repository with public work on other Creality and resin-printer platforms. “Same ecosystem” below means shared file formats, tools, or software patterns; it does not imply pin, MCU, or firmware compatibility.
+
+## What the HALOT evidence actually proves
+
+The inspected CL-60 runs a Creality Linux host and a separate STM32 controller. This project has recovered a fixed-frame host UART protocol, including `M678`, `M114`, `M410`, and status replies, and traced the exposure image path through H616 HDMI and an RK628 bridge to MIPI DSI. Those results are specific to the installed CL-60 image and the one physical unit.
+
+The extracted `halotMachine.xml` and `PrinterUI` build contain profiles for multiple Creality machine identifiers, including `CL60`, `CL89`, `CL89D`, `CL89L`, `CL133`, `CL130`, and other variants. The profiles select different `SendSerialModelType` values and display/output configuration. This proves that the **same inspected host application build contains multi-model branches**. It does not prove that the corresponding retail printers ship that exact build, have the same PCB, or use the same STM32 application protocol.
+
+There is public evidence for a common Creality file ecosystem: UVtools implements CXDLP/CXDLPV4 and has PrusaSlicer profiles for HALOT-ONE CL-60, HALOT-SKY CL-89, HALOT-LITE CL-89L, HALOT-ONE PLUS CL-79, and HALOT-ONE PRO CL-70. These older models use the CXDLP family in those profiles; the HALOT-MAGE CL-103L profile uses CXDLPV4, while LD-002R/H profiles use CTB. The CL-60 profile declares 1620×2560 display pixels and HALOT-specific file-format tags. UVtools maintainers also report that some CXDLP settings are ignored by the printer in favor of settings stored in the printer UI/firmware. That is useful for the **job-file and slicer layer**, but it does not establish that layer metadata maps one-to-one to the STM32 `M678` parameters.
+
+An independent 2021 HALOT-SKY teardown reports the same broad architecture class as this CL-60: Linux/OpenWrt host, separate STM32F103 motion controller, and HDMI-to-MIPI monochrome-panel bridge. Its identified host SoC is Allwinner H6 and its bridge is Lontium LT6911C; this CL-60 has H616 and RK628 according to our live software/device evidence. This is strong evidence of a shared design pattern in an older HALOT branch, while the changed SoC and bridge are reasons not to assume identical binaries or display protocol.
+
+### Package-level evidence across older HALOT models
+
+The official HALOT-SKY, HALOT-LITE, HALOT-ONE PLUS, and HALOT-ONE PRO download pages resolve their `V1_H2.238.2a2.238.2_C2.238.2_R2.238.2` entries to the **same CDN object**, not four merely similar filenames. The shared archive is 130,822,607 bytes with SHA-256 `b80147dcd1f47d8124bef7b90d9cd6c23ce2af3f16c78a16b7ed737d94c31d57`. Its SWU contains a TinaLinux rootfs and a single `/etc/V1-01.bin` STM32 updater image. The extracted MCU image is 31,248 bytes, SHA-256 `379470dd8afe47b152cabdedcd6c983b1fc112c07d164a18d8d0fbb89677f319`. Thus these four official download entries served the same host and STM32 payload at this release point. That is direct package identity evidence; it does not establish identical mainboards, wiring, panel timing, or safe interchange of the complete printer configuration.
+
+The local HALOT-ONE CL-60 is on a later `2.303.1` generation. The selected component comparison is:
+
+| Component | Shared 2.238.2 package | Local CL-60 2.303.1 | Result |
+|---|---|---|---|
+| STM32 `/etc/V1-01.bin` | 31,248 B, SHA-256 `379470dd8afe47b152cabdedcd6c983b1fc112c07d164a18d8d0fbb89677f319`, version string `SWV1.821` | 33,236 B, SHA-256 `a950f58db8382c5673b12ee81cd2ebb4833832aa1e226829bd61a1c29d7d7c02`, `SWV1.89` | Firmware changed; not byte-compatible. |
+| `PrinterUI` | 4,377,568 B, SHA-256 `f7256aa2a1401b4aa93a9992c994c7cfad63b0d693138aa8db47c83c1d9b6668` | 4,561,896 B, SHA-256 `a0a0b919bf2a7cc181c120be5e0983624511e25e7eb24406c65e0a6b20d5e8c1` | Different builds; both contain CL60/CL89 model strings, M114 vocabulary, and the `M678 Z%1 U%2 D%3 T%4 P%5 M%6 L%7` template. This demonstrates a shared host-software/interface lineage, not identical runtime behavior for every model. |
+| `halotMachine.xml` | 60,211 B, SHA-256 `fe47871811e1df82a120d2f4fd6916c48bca1d63868b0b2b15666ded3b65027c` | 60,611 B, SHA-256 `0854ac93b448d882fc9704516dff0377e699fc2d6897d66ce8cb6dd74aa74fd9` | Changed file; both retain the same CL60/CL60R/CL89 profile labels. |
+| RK628 kernel module | `rk628_mod.ko`, 1,933,184 B, SHA-256 `598c16ce536e868d4ca3573775a3c3c6a548cdcf55f23e27d78ed93199844d12` | Same size and SHA-256 | Byte-identical display-bridge driver across the compared generations. |
+| Kernel | 13,484,032 B, SHA-256 `6cb3f84433e9a5e18527fca7f61a951aeaee814134055319f4d6179cba9a5422` | 13,484,032 B, SHA-256 `9eb14d93b641fa830c2caac8eac58941edb8da7a159fd10da6d19e9e150bdb22` | Changed; both image manifests report Linux `4.9.170`. |
+| Rootfs SquashFS | 111,804,416 B, SHA-256 `01ac30e620b0d59e042da253cf6e527c5572d84fc80786cc28ee3c64e4be46c7` | 111,935,488 B, SHA-256 `4764f1dbb36daf7580061a5c3c90775c64ef06d8a5c25906b8725168d23dfd88` | Changed. |
+
+This comparison makes the lineage more specific: the 2.238.2 download used for SKY/LITE/ONE PLUS/ONE PRO contains a multi-model TinaLinux `PrinterUI` build with CL60 and CL89 profiles and a CL60-style M678 template; the later CL-60 2.303.1 build retains those model labels/template and the byte-identical RK628 driver, while its host app, rootfs, kernel, and STM32 image changed. The common M678 template is a strong lead for protocol comparison, but no independent raw STM32 UART trace from a second retail model was found. The exact template does not prove all fields have the same hardware effect or timing on every profile.
+
+## Comparison matrix
+
+| Project or device family | Publicly established | Relation to this CL-60 port |
+|---|---|---|
+| HALOT-SKY / LITE / ONE PLUS / ONE PRO (2.238.2) | Four official support entries resolve to one identical archive and therefore one identical Linux and STM32 image set. Its multi-model `PrinterUI` contains CL60/CL89 strings and the M678 template. | Strongest cross-model software match found. The 2.303.1 CL-60 comparison shows that the STM32 and host app evolve between releases, so the older image must be treated as its own protocol revision; no independent second-model raw trace confirms hardware behavior. |
+| HALOT-MAGE / MAGE S | These later branches have separate official firmware entries and board evidence diverges: Creality's MAGE mainboard kit is explicitly marked STM32F401RCT6; a reseller identifies the MAGE S V2.3.4 board with `FQ6630`/`SSD202D` labels. No MAGE S UART trace was found. | HALOT branding and resin-job formats do not imply a common MCU. Treat these as separate targets until their Linux and MCU images and interfaces are compared. |
+| HALOT-SKY hardware | An independent teardown reports Allwinner H6 + OpenWrt/Linux, STM32F103, and a Lontium LT6911C HDMI-to-MIPI bridge for the exposure screen. | Repeats the broad Linux-host + controller-MCU + separate image-bridge pattern seen on our CL-60, but uses a different SoC and bridge. No public UART capture located in this research confirms the CL-60 commands on SKY. |
+| UVtools / PrusaSlicer profiles | UVtools supports CXDLP and CXDLPV4; its repository contains profiles for CL-60, CL-89, CL-89L, CL-79, CL-70, and CL-103L. The first five use CXDLP; CL-103L uses CXDLPV4. Community-reported compatibility depends on CXDLP version and installed firmware. | Reusable today for sliced-job inspection/conversion. It is not a printer firmware, does not replace PrinterUI, and does not drive the CL-60 motion or panel directly. |
+| Open Resin Alliance: Odyssey | Odyssey README targets Prusa SL1 job processing on Apollo boards and the Prometheus MSLA printer. It exposes configuration for a serial endpoint, framebuffer, pixel packing, G-code, UV/cure control, and synchronization replies. | A strong architectural reference for the host-side adapter we need. The HALOT serial dialect, fixed frame, RK628 display route, and `M678`/`M114` synchronization need a HALOT backend; the current README does not claim CL-60 support. |
+| Open Resin Alliance: Orion | Orion is the UI frontend for Odyssey and is primarily documented for Linux SBC deployments, with Raspberry Pi and ARM64 build instructions. | Could inform a replacement operator UI after the stock graphics/touch ABI is understood. Installing Orion alone cannot control the HALOT's MCU or exposure panel. |
+| Open Resin Alliance: LUMEN | LUMEN is a specified open job format with conformance vectors and a reference implementation. The project states that it is not printer-specific and requires firmware support. | A later input format for a port, once an adapter/backend reads LUMEN layers and schedules them through the recovered HALOT control/display contracts. It is not a drop-in `.cxdlp` replacement on stock firmware. |
+| NanoDLP | NanoDLP documents a generic host/controller architecture using a framebuffer/LCD and a serial or compatible controller; its official controller board is based on configurable Marlin firmware. | Conceptually similar host/display/motion split, but no CL-60 compatibility is documented. Direct use would need an adapter or replacement controller and a proven display path. |
+| Turbo Resin | The open firmware repository says it is based on reverse engineering the Anycubic Photon Mono 4K; its current build targets include Anycubic Mono 4K and Saturn. Its README lists Creality among possible future targets. | Useful reverse-engineering and embedded-firmware reference, not a HALOT port. The target board, LCD interface, boot path, and UV/motion hardware differ and need their own drivers. |
+| Community HALOT root mods | There are model-specific root/SSH and file-transfer projects for HALOT-MAGE S and HALOT-MAGE PRO. The documented changes target those models' update/rootfs paths. | They show that the Linux layer can be modified on some other HALOTs, but they do not replace the motion MCU firmware and are not update packages for the CL-60. |
+
+## Public protocol evidence and alternative firmware limits
+
+The closest public HALOT-ONE reverse-engineering write-up is the 2022 Creation Factory article. It independently describes TinaLinux/OpenWrt, root access, `PrinterUI`, the Wi-Fi file-transfer service, and CL60 movement strings such as `G0 Z170 F1 D1 S1 H2`. This aligns with the host-side architecture and some command vocabulary in this repository. It is not a raw UART capture and does not document the `M678`/`M114` layer-completion exchange. Searches for `M678`, `M410_OK1`, `M114`, UART traces, and logic-analyzer captures across the public materials checked for SKY, ONE PLUS, MAGE, and LD-series machines did not locate an independent STM32 command table or wire trace. That is a bounded search result, not proof that no such material exists.
+
+Alternative projects are useful at different layers, but none found here is a drop-in HALOT firmware. Odyssey is an engine aimed at Apollo/Prometheus; Orion is its UI; LUMEN is a job format; NanoDLP expects a configurable controller protocol; Turbo Resin targets Anycubic Mono 4K/Saturn. The Mage S/Pro toolkits modify Linux/root access on those named machines. They provide design references or parts of a future host-side port, not compatible CL-60 MCU images.
+
+## Shared layers versus non-shared contracts
+
+The ecosystem has at least four contracts, and evidence for one cannot stand in for another:
+
+1. **Job container:** CXDLP/CXDLPV4, layer masks, thumbnails, and print metadata.
+2. **Linux-to-controller control:** fixed UART frame and command/reply dialect on `/dev/ttyS2` for this CL-60.
+3. **Image presentation:** the separate H616 HDMI → RK628 → MIPI DSI path and the panel's pixel/channel mapping.
+4. **Electrical board interface:** connectors, signal levels, motor driver, UV outputs, sensors, and boot/reset wiring.
+
+Public CXDLP support establishes layer 1 only. Our live trace and static disassembly establish much of layer 2 for one firmware. The H616/RK628 trace establishes a large part of layer 3, but physical pixel mapping remains open. Layer 4 still needs board-level evidence. A model can share CXDLP while differing in every other layer.
+
+## What to investigate next
+
+Next, compare the 2.238.2 and 2.303.1 command builders and STM32 handlers at the function level, then map the older build's model-selection values onto the XML profiles. For a sibling-machine claim, obtain a passive UART trace from a known model/profile or a distinct officially published model-specific binary. Any binary match should be reported by cryptographic hash; similar filenames or shared command names are insufficient.
+
+Do not send motion, reset, or UV commands to the CL-60 just to check whether another model's protocol is accepted.
+
+## Sources
+
+- [Creality HALOT-ONE downloads](https://www.creality.com/download/creality-halot-one-resin-3d-printer)
+- [Creality HALOT-MAGE firmware support page](https://www.creality.com/support/halot-mage-3d-printer)
+- [Creality HALOT-ONE PLUS downloads](https://www.creality.com/download/halot-one-plus-3d-printer)
+- [Creality HALOT family firmware catalog](https://www.crealitycloud.com/tr/downloads/firmware/halot-series)
+- [Creality HALOT-SKY firmware page](https://www.creality.com/download/halot-sky-3d-printer)
+- [Creality HALOT-LITE firmware page](https://www.creality.com/download/creality-halot-lite-resin-3d-printer)
+- [Creality HALOT-ONE PRO firmware page](https://www.creality.com/download/halot-one-pro-3d-printer)
+- [Shared 2.238.2 HALOT firmware archive](https://file2-cdn.creality.com/file/63c45268ee001da26529f5f3629f7834/V1_H2.238.2a2.238.2_C2.238.2_R2.238.2.tar.gz)
+- [Independent HALOT-SKY hardware teardown](https://3dtoday.ru/blogs/dagov/fotopolimernyi-monstr-ot-creality-halot-sky)
+- [UVtools](https://github.com/sn4k3/UVtools)
+- [UVtools CL-60 PrusaSlicer profile](https://github.com/sn4k3/UVtools/blob/master/PrusaSlicer/printer/Creality%20Halot%20One%20CL-60.ini)
+- [UVtools model profiles](https://github.com/sn4k3/UVtools/tree/master/PrusaSlicer/printer)
+- [CHITUBOX format compatibility list](https://docs.chitubox.com/en-US/chitubox/latest/introduction)
+- [UVtools CXDLP implementation](https://github.com/sn4k3/UVtools/blob/master/UVtools.Core/FileFormats/CrealityCXDLPFile.cs)
+- [UVtools CXDLPV4 implementation](https://github.com/sn4k3/UVtools/blob/master/UVtools.Core/FileFormats/CrealityCXDLPv4File.cs)
+- [UVtools discussion of CXDLP settings](https://github.com/sn4k3/UVtools/discussions/624)
+- [Open Resin Alliance Odyssey](https://github.com/Open-Resin-Alliance/Odyssey)
+- [Open Resin Alliance Orion](https://github.com/Open-Resin-Alliance/Orion)
+- [Open Resin Alliance LUMEN format](https://github.com/Open-Resin-Alliance/LumenFormat)
+- [NanoDLP controller documentation](https://docs.nanodlp.com/guide/controller-board/)
+- [Turbo Resin open firmware](https://github.com/nviennot/turbo-resin)
+- [HALOT-MAGE S Toolkit](https://github.com/rogersstuart/Halot-Mage-S-Toolkit)
+- [HALOT-MAGE PRO mods](https://github.com/xyzzyi/Halot-mage-PRO-MSLA-mods)
+- [Independent 2022 HALOT-ONE root and network notes](https://www.creationfactory.co/2022/01/rooting-creality-halot-one-resin-3d.html)
+- [Official Creality HALOT-MAGE mainboard with STM32F401RCT6](https://mvip.creality.com/en/goods/goodsDetail/1984)
+- [Official Creality HALOT-MAGE S board listing](https://vip.creality.com/en/goods-detail/2201)
+- [Official Creality HALOT-MAGE S exploded view](https://vip.creality.com/en/exploded-view-detail/168)
+- [Reseller listing with HALOT-MAGE S V2.3.4 and FQ6630/SSD202D board identifiers](https://crealitybrasil.com.br/products/placa-mae-para-impressora-3d-halot-mage-s-creality-v2-3-4-fq6630-ssd202d)
