@@ -129,7 +129,7 @@ The `V114`/`89` pair is consistent with a version query and the firmware string 
 | Family | Observed command/string | Current interpretation |
 |---|---|---|
 | Version/model handshake | `V114`, `MODELS:`, `MODELS `, `GET MODELS:%s OK` | Startup trace captures `V114` → `89\n` and `MODELS:A` → `GET MODELS:A OK\n`; the version interpretation is consistent with `SWV1.89` in the MCU image. |
-| Z axis | `G0 Z500 F… D1 S1/S0 H…`; `G0 Z… F… D0 S1/S0 H…` | UI builders label the first command “up” and the second “down”; `F` is a speed-like parameter, `H` is the configured helical pitch, and `S` selects the external/non-external motor variant. |
+| Z axis | `G0 Z500 F… D1 S1/S0 H…`; `G0 Z… F… D0 S1/S0 H…` | UI builders label the first command “up” and the second “down”; a [public HALOT-ONE host log](https://www.creationfactory.co/2022/01/rooting-creality-halot-one-resin-3d.html) independently labels `D1`/`D0` commands up/down, corroborating `D` as a direction selector at command-generation level. Neither source establishes the wire-level reply or the physical meaning/units of every field. `F` is speed-like, `H` is the configured helical pitch, and `S` selects the external/non-external motor variant. |
 | Position/status | `M114`, `M113`, `M108`, `M410 S0/S1/S2` | `M108` returns three sampled GPIO levels as `M108_<0|1>_<0|1>_<0|1>`; the raw register bases and masks are below. `M410` always emits `M410_OK1`; its state-reset/stop behavior depends on current controller state, and exact meanings for S0/S1/S2 are not fully recovered. |
 | Layer operation | `M678 Z… U… D… T… P… M… L…` | PrinterUI builds this exact ordered template for first, bottom, and regular layers. STM32 emits `M678_Busy` before parsing the seven values, then sets busy state and wakes a worker task. This is an acceptance reply, not completion. The live trace captured 303 M678 requests with 303 acknowledgements; 302 cycles include `M114_DELATLIGHT_OVER` followed by `M114_OK` before the next request. The last cycle was still in progress at the end of the local snapshot. |
 | Temperature | `M105`, `M105 T… ON`, `M105 T OFF`; reply template `M105_TA…_TB…` | Temperature query/report and on/off control paths. |
@@ -138,6 +138,8 @@ The `V114`/`89` pair is consistent with a version query and the firmware string 
 | Other | `M800`, `M800 S0`, `M800_OK` | The firmware replies `M800_OK` immediately. Exact token `S0` then runs a seven-stage USART3 DMA exchange with event waits and per-stage delays; there is no separate completion ACK. Packet contents and meanings remain unresolved. |
 
 ### Live print trace (2026-09-28)
+
+Cross-version PrinterUI disassembly shows that `lcdPrint` and its initial/regular `M678` builders read `Z`, `U`, and `D` from the CXY fields documented below without a per-layer transformation in the layer loop. The setters truncate their inputs to 16-bit values. Generic JSON/MQTT property handlers call `setPrintHeight`/`setEleSpeed`, and the outbound property publisher reads the same fields. The CL60 XML defaults (`PrintHeight=6`, `EleSpeed=1`) differ from the captured commands (`Z=5/10`, `U/D=2/3`); the exact path that supplies the effective values for this job has not been recovered, so the captured changes should not be described as proven per-layer calculations.
 
 The host attached `strace` to the already-running PrinterUI during a user-started job; it did not send commands or open a second reader on `/dev/ttyS2`. Every captured command write was 101 bytes: a text command in the 96-byte body, space padding, four `0x55` trailer bytes, and LF. This independently confirms the frame layout during printing. The latest local snapshot covers 15:51:22–17:07:27 UTC; it contains 9,163 command writes and 9,163 complete response lines, with no malformed command frames or partial trailing response. The raw trace remains private and is intentionally not included in this public repository.
 
@@ -186,9 +188,9 @@ PrinterUI's literal template is `M678 Z%1 U%2 D%3 T%4 P%5 M%6 L%7 ` (including a
 
 | Word | Token value offset in STM32 scratch | What is established |
 |---|---:|---|
-| `Z` | `0x0b` | Decimal value parsed and stored; UI takes it from a profile field. |
-| `U` | `0x15` | Decimal value parsed and stored; UI currently formats the same profile field used for `D`. |
-| `D` | `0x1f` | Decimal value parsed and stored; UI currently formats the same profile field used for `U`. |
+| `Z` | `0x0b` | Decimal value parsed and stored; PrinterUI reads CXYManager offset `+0x18`, the field written by `setPrintHeight`. |
+| `U` | `0x15` | Decimal value parsed and stored; PrinterUI reads CXYManager offset `+0x1a`, the field written by `setEleSpeed`. |
+| `D` | `0x1f` | Decimal value parsed and stored; PrinterUI reads the same CXYManager offset `+0x1a` used for `U`. |
 | `T` | `0x29` | Decimal value sourced from job/profile data. The live value `0.05` matches the operator UI's displayed 0.05 mm layer thickness. |
 | `P` | `0x33` | The first-layer builder scales its source by 1000; normal layers use a floating profile value. Live phase duration strongly supports milliseconds as the transmitted unit (see trace measurements above). |
 | `M` | `0x3d` | The host builder scales a `CXYManager` value at offset `0x20` by 1000. The active `halotMachine.xml` profile has `DelayLight=4`, while the live job sends `M4000`; other observed values `M5000` and `M3000` track the selected profile values. This strongly supports `M` as the delay-before-light value converted from seconds to milliseconds. The structure-offset-to-named-setting link and the STM32 timer's exact use still need direct confirmation. |
