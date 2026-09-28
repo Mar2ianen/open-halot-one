@@ -194,14 +194,14 @@ PrinterUI's literal template is `M678 Z%1 U%2 D%3 T%4 P%5 M%6 L%7 ` (including a
 | `M` | `0x3d` | The host builder scales a `CXYManager` value at offset `0x20` by 1000. The active `halotMachine.xml` profile has `DelayLight=4`, while the live job sends `M4000`; other observed values `M5000` and `M3000` track the selected profile values. This strongly supports `M` as the delay-before-light value converted from seconds to milliseconds. The structure-offset-to-named-setting link and the STM32 timer's exact use still need direct confirmation. |
 | `L` | `0x47` | `GetCurLayoutArea(0)` computes panel width × height × pixelX × pixelY: for the active CL60 profile, 1620 × 2560 × 0.05² = 10,368 mm². Later layers use an unsigned per-layer area vector divided by 1000. The [UVtools CXDLP writer](https://github.com/sn4k3/UVtools/blob/master/UVtools.Core/FileFormats/CrealityCXDLPFile.cs) computes that stored vector as the largest external contour area × pixel area × 1000 and labels it mm² × 1000. This strongly supports `L` as full panel area for layer 0 and the largest external contour's physical area in mm² for later layers. The exact parser-to-vector provenance and STM32's operational use of `L` remain to be confirmed. |
 
-The STM32 stores these parsed values as binary64 pairs at build-specific RAM addresses. `U`, `D`, `P`, `M`, and `L` are copied directly. `Z` and `T` are each multiplied by the binary64 constant `2.04345703125` before storage. The observed destinations are:
+The STM32 stores these parsed values as binary64 pairs at build-specific RAM addresses. `U`, `D`, `P`, `M`, and `L` are copied directly. The M678 handler passes `Z` and `T` through the binary64 multiply helper with the constant `100.0` (`0x4059000000000000`) before storage. This is an internal scale step; it does not by itself establish physical units or the later motor/timer conversion. The observed destinations are:
 
 | Word | STM32 RAM destination | Transformation before storage |
 |---|---:|---|
 | `U` | `0x200000b0` | Parsed binary64 copied directly |
 | `D` | `0x200000b8` | Parsed binary64 copied directly |
-| `Z` | `0x200000c0` | Parsed binary64 × `2.04345703125` |
-| `T` | `0x200000c8` | Parsed binary64 × `2.04345703125` |
+| `Z` | `0x200000c0` | Parsed binary64 × `100.0` |
+| `T` | `0x200000c8` | Parsed binary64 × `100.0` |
 | `P` | `0x200000d0` | Parsed binary64 copied directly |
 | `M` | `0x200000d8` | Parsed binary64 copied directly |
 | `L` | `0x200000e0` | Parsed binary64 copied directly |
