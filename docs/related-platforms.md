@@ -27,7 +27,18 @@ The local HALOT-ONE CL-60 is on a later `2.303.1` generation. The selected compo
 | Kernel | 13,484,032 B, SHA-256 `6cb3f84433e9a5e18527fca7f61a951aeaee814134055319f4d6179cba9a5422` | 13,484,032 B, SHA-256 `9eb14d93b641fa830c2caac8eac58941edb8da7a159fd10da6d19e9e150bdb22` | Changed; both image manifests report Linux `4.9.170`. |
 | Rootfs SquashFS | 111,804,416 B, SHA-256 `01ac30e620b0d59e042da253cf6e527c5572d84fc80786cc28ee3c64e4be46c7` | 111,935,488 B, SHA-256 `4764f1dbb36daf7580061a5c3c90775c64ef06d8a5c25906b8725168d23dfd88` | Changed. |
 
-This comparison makes the lineage more specific: the 2.238.2 download used for SKY/LITE/ONE PLUS/ONE PRO contains a multi-model TinaLinux `PrinterUI` build with CL60 and CL89 profiles and a CL60-style M678 template; the later CL-60 2.303.1 build retains those model labels/template and the byte-identical RK628 driver, while its host app, rootfs, kernel, and STM32 image changed. Both MCU images contain the same principal command strings, but their image layout/handler addresses differ; an instruction-level comparison is still in progress. The common M678 template and command vocabulary are strong leads for protocol comparison, but no independent raw STM32 UART trace from a second retail model was found. Matching strings do not prove matching field effects or timing.
+### STM32 handler comparison
+
+The two MCU images are different builds, but targeted Thumb-code comparisons show more than matching strings:
+
+| Branch | 2.238.2 image | 2.303.1 image | Comparison |
+|---|---|---|---|
+| `GET MODELS:%c OK` | String at `0x080055fc`, reference near `0x0800542a` | String at `0x08005dd0`, reference near `0x08005a3e` | The compared handler windows contain 20 identical normalized Thumb instructions, including the model-byte load/compare/update shape. Strong evidence that this small selector branch was retained. |
+| `M114` | Command near `0x08005806`; response references around `0x0800587e–0x0800591a` | Command near `0x08005eb0`; response references around `0x08005f26–0x08005fc2` | 120 of 121 normalized instructions match. The old code loads `0x2000040a` then subtracts 10; the new loads `0x20000414`. This may be an input-buffer/global-layout change, but old RAM aliases are not resolved, so identical runtime semantics are not established. |
+| `M410` | Token/string near `0x08005b5a–0x08005d88` | Token/string near `0x080060bc–0x08006354` | 104 of 105 normalized instructions match; the difference is a PC-relative literal load moved across a branch join. Control/store shape aligns, but global alias targets were not validated. |
+| `M678` | Dispatch references near `0x08005c62–0x08005ddc` | Dispatch references near `0x080061c4–0x08006384` | Both retain the command and `M678_Busy` strings. The full parameter/configuration handler has not been compared; do not assume matching parameter semantics. |
+
+The old image was extracted temporarily for this comparison and was not added to the repository. The later 2.303.1 image is the one already analyzed locally. This comparison makes the lineage more specific: the 2.238.2 download used for SKY/LITE/ONE PLUS/ONE PRO contains a multi-model TinaLinux `PrinterUI` build with CL60 and CL89 profiles and a CL60-style M678 template; the later CL-60 2.303.1 build retains those model labels/template and the byte-identical RK628 driver, while its host app, rootfs, kernel, and STM32 image changed. The selector branch and most of the sampled M114/M410 code are closely related across the MCU revisions, but changed RAM references and the unreviewed M678 handler leave semantic compatibility unproven. No independent raw STM32 UART trace from a second retail model was found.
 
 ## Comparison matrix
 
