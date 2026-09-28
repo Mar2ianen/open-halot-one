@@ -15,6 +15,8 @@ Hardware and firmware research notes for the Creality HALOT-ONE (CL-60). This is
 
 Evidence labels in the docs distinguish direct device observations, published specifications, and inferences. See [the hardware map](docs/hardware-map.md), [software map](docs/software-map.md), [UART and STM32 protocol map](docs/protocols.md), [display data path](docs/display-pipeline.md), [emulator and tracing experiments](docs/emulation.md), [firmware/update and boot analysis](docs/firmware-update.md), [ORA port plan](docs/ora-port-plan.md), [PrinterUI analysis](docs/printerui-analysis.md), and [snapshot notes](docs/system-snapshot.md).
 
+The sanitized UART analyzer can decode syscall traces without including device captures in this repository: `python3 tools/decode_strace_uart.py capture.strace --fd 28 --cycles`.
+
 ## Data handling
 
 The public repository contains sanitized documentation only. The full per-device eMMC image, boot-area images, original `PrinterUI` executable, and Ghidra project are stored locally in the owner's private output archive because they contain device-specific data or vendor binaries. Serial numbers, MAC addresses, Wi-Fi credentials, keys, and user print files are not published here.
