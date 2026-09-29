@@ -137,6 +137,12 @@ def main() -> int:
     parser.add_argument("--events", action="store_true", help="print non-poll commands and replies")
     parser.add_argument("--cycles", action="store_true", help="summarize M678-to-M678 layer cycles")
     parser.add_argument("--limit", type=int, default=80, help="maximum detailed events to print")
+    parser.add_argument(
+        "--min-group-size",
+        type=int,
+        default=1,
+        help="hide parameter groups with fewer cycles (default: show all)",
+    )
     args = parser.parse_args()
 
     events, scanned_lines = parse_events(args.trace, args.fd)
@@ -284,7 +290,7 @@ def main() -> int:
             grouped[key].append(record)
         print("M678 timings grouped by command parameters (L omitted):")
         for key, records in grouped.items():
-            if len(records) < 5:
+            if len(records) < args.min_group_size:
                 continue
             intervals = [r["period"] for r in records if r["period"] is not None]
             sentinels = [r["sentinel"] for r in records if r["sentinel"] is not None]
