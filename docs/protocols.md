@@ -214,6 +214,10 @@ PrinterUI's literal template is `M678 Z%1 U%2 D%3 T%4 P%5 M%6 L%7 ` (including a
 
 The STM32 stores these parsed values as binary64 pairs at build-specific RAM addresses. `U`, `D`, `P`, `M`, and `L` are copied directly. The M678 handler passes `Z` and `T` through the binary64 multiply helper with the constant `100.0` (`0x4059000000000000`) before storage. This is an internal scale step; it does not by itself establish physical units or the later motor/timer conversion. The observed destinations are:
 
+The completed trace's full parameter tuples reduce to five groups: 2 cycles `(Z,U,D,T,P,M)=(5,3,3,0.05,40000,4000)`; 2 `(10,2,2,0.05,40000,5000)`; 22 `(10,2,2,0.05,4200,5000)`; 1 `(5,2,2,0.05,4200,5000)`; and 1,564 `(5,2,2,0.05,4200,3000)`. This confirms `T=0.05` on every layer and shows U and D travel as a pair in this job, but not their physical units or which upstream runtime setting selected the two Z/U/D profiles. Static host code maps Z to CXY `PrintHeight` and U/D to the same CXY `EleSpeed` field; those CXY values differ from the XML defaults, and the runtime override path remains unresolved. The file's own lift-height/speed fields do not match the captured U/D values.
+
+The local file header stores normal exposure `3`, bottom exposure `30`, six bottom layers, and wait-before-cure `1` in its raw fields. These numbers do not directly explain the captured `P=4200` and `P=40000` values or why only four M678 cycles carry 40000. Static host paths source initial P from `InitExposure × 1000`, regular P from CXY exposure at offset `+0x04 × 1000`, and M from `DelayLight` at offset `+0x20 × 1000`; the precise runtime path that populates or overrides those CXY values is still open. Do not treat the CXDLP wait-before-cure field as the source of M. The final layer has an empty/zero-gray mask and `L=0`, yet the host still sends `P=4200` and the full M678 status cycle completes; an empty mask therefore does not suppress this controller cycle.
+
 | Word | STM32 RAM destination | Transformation before storage |
 |---|---:|---|
 | `U` | `0x200000b0` | Parsed binary64 copied directly |
