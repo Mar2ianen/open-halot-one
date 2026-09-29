@@ -54,16 +54,17 @@ If no update is required, the script simply resets the MCU through PA0. This is 
 
 ## Main SoC boot and eMMC layout
 
-The live environment is readable through `fw_printenv`; `/etc/fw_env.config` points to the redundant environment partitions `env` and `env-redund` at offset `0`, with `0x20000` bytes in each. The running U-Boot reports version `2018.05`, `bootdelay=0`, `boot_partition=boot`, and `bootcmd=run setargs_nand boot_normal`. The active boot commands are:
+The saved environment is readable through `fw_printenv`; `/etc/fw_env.config` points to the redundant environment partitions `env` and `env-redund` at offset `0`, with `0x20000` bytes in each. The running kernel command line reports U-Boot version `2018.05-g14fbabb0`. The saved environment contains `bootdelay=0`, `boot_partition=boot`, and `bootcmd=run setargs_nand boot_normal`. Its relevant entries are:
 
 ```text
 setargs_nand=... root=${nand_root} ...
+setargs_mmc=... root=${mmc_root} ...
 boot_normal=sunxi_flash read 45000000 ${boot_partition};bootm 45000000
 boot_recovery=sunxi_flash read 45000000 recovery;bootm 45000000
 boot_fastboot=fastboot
 ```
 
-Thus the current normal path selects the `boot` GPT partition (`/dev/mmcblk0p5`), loads it at `0x45000000`, and calls `bootm`. The kernel command line confirms `root=/dev/mmcblk0p6`. With `bootdelay=0`, an interactive U-Boot prompt is not offered through the ordinary delay window; no alternate key or UART interruption path has been tested. The environment was read only.
+The saved command defines a read of the `boot` partition into `0x45000000` followed by `bootm`, but the current boot path is not fully resolved. `fw_printenv` reports `nand_root=/dev/nand0p4` and `mmc_root=/dev/mmcblk0p4`; neither matches the running kernel's `root=/dev/mmcblk0p6`. The running command line contains `boot_type=2`, but `fw_printenv boot_type` reports that variable is not defined in the saved environment. The vendor update manifest and GPT names identify `boot` as p5 and `rootfs` as p6, but that does not prove which U-Boot selection path produced the current command line. With `bootdelay=0`, an interactive U-Boot prompt is not offered through the ordinary delay window; no alternate key or UART interruption path has been tested. The environment was read only.
 
 The same environment capture lists fastboot key values `0x02–0x08` and recovery key values `0x10–0x13`; the physical key-to-value mapping and which copy of the redundant environment is active were not tested. These are captured configuration strings, not proof that a particular key sequence works.
 
@@ -75,7 +76,7 @@ The raw user-area prefix also contains Allwinner BOOT0/SPL strings (`u-boot` at 
 
 ## Could a custom, newer kernel boot?
 
-**Technically plausible, not yet demonstrated.** This unit has root access, a readable eMMC partition map, a vendor update plan that directly installs an Android boot image and rootfs, and a live U-Boot environment that boots `p5` through `bootm`. Those facts identify where a replacement boot image would need to land. They do not prove that an arbitrary image will boot or that a recovery path will work.
+**Technically plausible, not yet demonstrated.** This unit has root access, a readable eMMC partition map, a vendor update plan that directly installs an Android boot image and rootfs, and a saved U-Boot environment that names `boot` and `bootm`. The vendor package targets the `boot` and `rootfs` partitions, but the environment-to-live-command-line mismatch means the exact boot selection still needs to be explained. These facts identify the vendor update targets for a replacement image; they do not prove that an arbitrary image will boot or that a recovery path will work.
 
 The H616 is represented in the upstream Linux tree, including its SoC device tree and peripheral drivers ([upstream H616 DTS](https://github.com/torvalds/linux/blob/master/arch/arm64/boot/dts/allwinner/sun50i-h616.dtsi)). That establishes SoC-level mainline support, not a ready-to-boot HALOT-ONE image. A newer kernel still needs the correct board device tree, storage/PMIC configuration, boot-image packaging compatible with this U-Boot, and working printer display, touch, RK628, and CXSW-specific paths. The existing Qt UI also expects vendor interfaces such as `/dev/disp` and `/dev/ion`.
 
