@@ -39,7 +39,7 @@ The printer's product documentation identifies the exposure panel as a monochrom
 ## Other software paths
 
 - MQTT async, WebSocket, `CXYManager`, upload/download, and firmware-update functions are present. Embedded build strings identify a candidate `cxpm2-2.303.1` application build.
-- `PrinterUI` listened on TCP port `18188` at a specific local address during the runtime inspection. Its local address is intentionally excluded from this public project.
+- A runtime listing on 2026-09-29 showed `PrinterUI` listening on TCP `:::18188`; IPv4 dual-stack behavior was not checked. The `libcxWebsocket.so` service and its statically recovered JSON API are documented in [network-control-protocol.md](network-control-protocol.md).
 - The process opened `/dev/disp`, `/dev/ion`, `/dev/mali0`, `/dev/fb0`, and touch input. This matches the Qt GUI and the separate image-output backend.
 - The binary clone, Ghidra database, decompiler pseudocode, function index, and string-reference listing are retained in the owner's private local output archive. Vendor code is not committed to this repository.
 
