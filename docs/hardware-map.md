@@ -92,7 +92,7 @@ The downloaded rootfs includes an STM32 updater and `V1-01.bin`, confirming a di
 | I²C 2, `0x50` | `rockchip,rk628` | Bound to `rk628`; live HDMI-RX 540×2560 to DSI1, 4 × 840 Mb/s; active exposure-image route with high confidence |
 | I²C 3, `0x38` | `cxsw_ctp` | Touch input controller; `/dev/input/event2` |
 | I²C 5, `0x36` | `axp806` | Power-management IC driver name |
-| UART | `ttyS0`, `ttyS1`, `ttyS2` | `ttyS0` is the Linux console; PrinterUI and the STM32 updater use `/dev/ttyS2` for the control path; physical endpoint, connector, signal level, and MCU pins remain untraced |
+| UART | `ttyS0`, `ttyS1`, `ttyS2` | `ttyS0` is the Linux console; PrinterUI and the STM32 updater use `/dev/ttyS2`. Live pinctrl debugfs shows UART2 TX on H616 PH5 and RX on PH6; the board route, connector, signal voltage, and STM32 pins remain unverified |
 | GPU | `/dev/mali0`, platform device `gpu` | Live `gpuinfo` identifies Mali-G31, one core, product ID `0x7093`; proprietary `mali_kbase` module `r20p0-01rel0` |
 
 These names are Linux driver/client labels observed under `/sys/bus/i2c/devices`; they are not all independently confirmed silicon part numbers.
@@ -128,4 +128,5 @@ The printer has not been opened. The next useful evidence, if the owner later ch
 - [Creality wiring/UV troubleshooting diagram](https://wiki.creality.com/en/halot-series/halot-series-general-troubleshooting/the-uv-light-remains-on-even-after-turning-off-the-clear-screen-or-completing-the-print)
 - [Rockchip RK628D video-bridge overview](https://www.rock-chips.com/a/cn/news/rockchip/2021/0402/1383.html)
 - [UART, STM32 command, and ROM-loader protocol findings](protocols.md)
+- [Linux upstream H616 pin-function table](https://github.com/torvalds/linux/blob/master/drivers/pinctrl/sunxi/pinctrl-sun50i-h616.c#L3296-L3318)
 - [Firmware/update chain and boot path](firmware-update.md)
