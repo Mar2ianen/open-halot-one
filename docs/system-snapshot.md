@@ -2,7 +2,7 @@
 
 ## Scope
 
-The local snapshot is a read-only capture of the HALOT-ONE eMMC user area plus the separate eMMC boot0/boot1 areas. It includes the device's installed firmware, configuration, logs, keys, Wi-Fi credentials, and files on `/mnt/UDISK`; treat it as private. It is not uploaded to this public repository.
+The local snapshots are read-only captures of the HALOT-ONE eMMC user area plus the separate eMMC boot0/boot1 areas. They include the device's installed firmware, configuration, logs, keys, Wi-Fi credentials, and files on `/mnt/UDISK`; treat them as private. They are not uploaded to this public repository.
 
 RPMB is not part of the user-area image and was not read. The image is taken while Linux is running, so writable ext4 filesystems may not be crash-consistent. Keep the original image unchanged and work on copies when extracting or modifying firmware.
 
@@ -16,7 +16,7 @@ Comparing the vendor TOC1 update member with the complete user-area capture foun
 
 Read-only `fw_printenv` confirmed U-Boot `bootdelay=0`, `boot_partition=boot`, and `bootcmd=run setargs_nand boot_normal`. `boot_normal` reads the selected `boot` partition into RAM at `0x45000000` and invokes `bootm`; the running kernel confirms its root at `/dev/mmcblk0p6`. The redundant environment utility config points to `env` and `env-redund`, each with a 128 KiB environment region. No environment variables or partitions were changed.
 
-The whole user-area block device reports 7,636,800 KiB (7,820,083,200 bytes). The read-only capture completed at that exact byte count. The local zstd image decodes to the same SHA-256 as the captured raw stream. Separate 4 MiB `boot0` and `boot1` captures also completed; their hashes match each other. Exact file sizes and checksums are in the local `snapshot/manifest.txt`.
+The whole user-area block device reports 7,636,800 KiB (7,820,083,200 bytes). The initial read-only capture completed at that exact byte count. A second post-print snapshot was captured on 2026-09-29 through the loopback SSH bridge with BusyBox `dd`; it also has the exact byte count, and its compressed image passes `zstd -t` and decompresses to the recorded raw-stream SHA-256. Its boot0/boot1 captures match each other and the earlier captures. GPT boundaries for p1–p10 match the initial snapshot, and the contiguous p1–p6 system area is byte-identical. Writable/runtime partitions may differ because Linux remained live. Exact sizes and checksums are in the private local snapshot manifests.
 
 ## Private local artifact set
 
@@ -24,7 +24,7 @@ The owner-facing outputs directory contains the compressed complete image, boot0
 
 ## Reproduction tools
 
-- ADB through the rear USB device/debug port (`Allwinner` / `Tina` USB gadget).
-- `adb pull /dev/mmcblk0` for the eMMC user area.
-- `adb pull /dev/mmcblk0boot0` and `adb pull /dev/mmcblk0boot1` for the eMMC boot areas.
-- `sha256sum` to identify each capture; `zstd` is used only on the host to compress the completed image.
+- ADB through the rear USB device/debug port (`Allwinner` / `Tina` USB gadget) to establish the root shell or loopback-only SSH bridge.
+- On the device, read `/dev/mmcblk0` with `dd if=/dev/mmcblk0 bs=4096 count=1909200`; read `boot0` and `boot1` with `bs=4096 count=1024`. Keep the device running and treat writable filesystems as potentially inconsistent.
+- The first ADB sync pull stopped early; the complete post-print image was streamed through the read-only SSH bridge.
+- On the host, record `sha256sum`, compress with `zstd`, run `zstd -t`, then compare the decompressed stream's SHA-256 with the raw-stream hash.

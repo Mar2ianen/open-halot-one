@@ -21,11 +21,17 @@ The ORA contact page directs project requests to the relevant repository's GitHu
 | Host | Allwinner H616, TinaLinux, vendor Linux `4.9.170`, U-Boot `2018.05` | A HALOT board DTS, supported boot-image packaging, active/fallback boot path, and a proven rollback route |
 | Operator UI | Display engine reports an `800x480@59` RGB24 screen; touch controller appears at I²C3 `0x38` | Panel timing/power details for a mainline DTS; mapping and calibration of all touch events under the new UI |
 | Exposure display | Active path is H616 HDMI output at 540×2560 → RK628 HDMI RX at I²C2 `0x50` → MIPI DSI1 at 4 × 840 Mb/s; `dsi_err=0`. Static `CL60R` type-1 timing lookup selects 540×2560 at 112 MHz, separately from the HDMI-path `src`/`dst` report. The I²C0 `dlp1438` driver rejects this product (`-22`). | Effective runtime DSI timing override, physical FPC trace, exact pixel-to-column mapping, layer-to-VSYNC synchronization, error recovery, and a mainline RK628/panel driver |
-| Control MCU | PrinterUI and the startup updater use `/dev/ttyS2`; application link is 115200 8N1; fixed framing, `M678` storage/state flow, `M113`/`M114`, `M108` input bits, static `M42`/`M355`/`M410`, and raw `reboot`/`test` ISR exceptions are documented in [the protocol map](protocols.md) | Physical meaning/units of `Z/U/D`, exact STM32 timer use of `P/M`, display-to-MCU gate, output pin mapping, remaining `M106`/`M107` semantics, MengTool endpoint/`ASK_DATA` reply format, and a passive wire trace |
+| Control MCU | PrinterUI and the startup updater use `/dev/ttyS2`; application link is 115200 8N1; fixed framing, `M678` storage/state flow, `M113`/`M114`, `M108` inputs, static `M42`/`M355`/`M410`/`M106`/`M107` paths, and raw `reboot`/`test` ISR exceptions are documented in [the protocol map](protocols.md) | Physical meaning/units of `Z/U/D`, exact STM32 timer use of `P/M`, operational use of `L`, display-to-MCU gate, board mapping of GPIO aliases and `M410` branches, MengTool endpoint/`ASK_DATA` reply format, and clean wire timing |
 | Firmware update | The vendor startup script can toggle BOOT0/reset and call `stm32flash` to write the bundled Cortex-M image | Exact STM32 part/read-protection state and safe recovery behavior; do not use the update sequence as a test command |
 | Display userspace | Stock PrinterUI expects vendor interfaces including `/dev/disp` and `/dev/ion` | Replace/adapt these consumers for DRM/KMS and modern buffer allocation, or keep the vendor kernel while proving the ORA userspace stack |
 
 The complete device and package notes are in [the hardware map](hardware-map.md), [the software map](software-map.md), [the protocol map](protocols.md), and [the firmware/boot analysis](firmware-update.md).
+
+## Local Odyssey prototype
+
+On 2026-09-28, a local Odyssey checkout at upstream commit `f7c8e68537848eabf3be09841a924d42b9a82403` received an inert HALOT protocol module on branch `codex/halot-cl60-inert-prototype`; a pure in-memory packer for the statically recovered source-triplet-to-BGRA transform was added on 2026-09-29. The work is not pushed upstream. The module exposes fixed-frame encoding, raw `M678` token formatting, incremental reply parsing, an observation-only layer cycle, and a timestamped replay API for sanitized layer/UART events. Replay validates ordering and replies without retaining `M678` parameter values. The candidate image buffer is not sent to a display and does not establish physical panel-column order. Odyssey's executable does not select or call the module, and it has no serial, framebuffer, GPIO, motor, or UV access.
+
+The source checkout's GPL-3.0 license was checked before adding the module. An offline compile check and formatting check passed before the image packer was added; the current source has only been format-checked. No tests or printer commands were run. The local integration note describes the current code seam and why a command-only `HardwareControl` implementation would not preserve the CL-60's per-layer image/UART order. A read-only source audit also found that Odyssey currently accepts SL1 jobs and its `Frame`/framebuffer path loses the dimensions and sample layout needed for the HALOT image route; those remain separate port tasks.
 
 ## Kernel feasibility
 
@@ -47,7 +53,7 @@ On a newer kernel, the existing UI's vendor `/dev/disp` and `/dev/ion` assumptio
 
 ### 2. Complete the hardware/software interface map
 
-- Finish residual protocol/UI cases: `M106`/`M107` value effects, all `M410` branches, MengTool's endpoint and `ASK_DATA` response format, and physical meanings for the recovered GPIO/PWM operations.
+- Finish residual protocol/UI cases: MengTool's endpoint and `ASK_DATA` response format, the physical meanings of the recovered GPIO/PWM and `M410` register operations, and the controller's use of the `M678 L` value.
 - Reproduce PrinterUI's 1620-to-540 layer packing and confirm how RGB channels map to monochrome columns; capture image/output timing relative to STM32 exposure commands.
 - Keep the operator UI and exposure display as separate pipelines. The exposure route is traced through the RK628 to DSI1, while the physical panel FPC and exact pixel mapping remain open.
 - Capture only passive serial traffic first; do not probe by sending motion or UV commands during protocol discovery.
