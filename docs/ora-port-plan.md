@@ -33,6 +33,8 @@ On 2026-09-28, a local Odyssey checkout at upstream commit `f7c8e68537848eabf3be
 
 The source checkout's GPL-3.0 license was checked before adding the modules. The current local source passes `cargo fmt --check` and `cargo check --offline`; no tests or printer commands were run. The local integration note describes the current code seam and why a command-only `HardwareControl` implementation would not preserve the CL-60's per-layer image/UART order. A read-only source audit also found that Odyssey currently accepts SL1 jobs and its `Frame`/framebuffer path loses the dimensions and sample layout needed for the HALOT image route; those remain separate port tasks.
 
+The installed 2.303.1 `lcdPrint` path has a one-layer decode prefetch: it submits image *i*, sends `M678` for *i*, starts parsing layer *i+1*, then waits for the current `M114_OK` before the next loop submits another frame. This is an overlap opportunity for the ORA scheduler, not permission to overlap display submissions and controller transactions. The active host reuses one ION buffer address for frame copies; potential tearing during scanout is an inference that needs timing evidence, not an observed defect. The local prototype plans one layer at a time and does not yet model this scheduling.
+
 ## Kernel feasibility
 
 **A newer kernel is technically feasible at the SoC level, but a complete HALOT port is not demonstrated yet.** The upstream Linux tree has H616 device-tree support, including the H616 DE33 display mixer binding. That is evidence that the CPU and some standard peripherals can run with mainline drivers; it is not a board description for this printer or proof that the exposure panel is supported.
