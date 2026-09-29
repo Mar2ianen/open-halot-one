@@ -2,6 +2,8 @@
 
 This page separates the Linux-to-controller serial protocol, the STM32 application commands, and the STM32 ROM programming protocol. Findings below come from the running Linux process, PrinterUI decompilation, the firmware shipped in the downloaded update, and syscall-level traces from startup and a user-started print. We still have no independent electrical UART capture; we did not reset the MCU into ROM mode or inject test commands.
 
+The reply names in this page are scoped to the inspected unit's installed `SWV1.89` application. A historical 2022 OTA package has a smaller `V1.21` STM32 image whose `M678` field slots align with the host template, but its visible replies are generic `Busy`, `OK1`, and `OK`; the current prefixed replies and `M114_DELATLIGHT_OVER` event path are absent from that image's strings/observed handler window. Treat those as protocol-generation differences, not aliases. The limited V1.21 static comparison is documented in [related platforms](related-platforms.md#stm32-handler-comparison).
+
 ## Linux UART to printer controller
 
 | Property | Finding | Evidence |

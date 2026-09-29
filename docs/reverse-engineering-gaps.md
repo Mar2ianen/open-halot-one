@@ -23,7 +23,19 @@ This is the working closure list for a replacement host/backend on the inspected
 2. The post-print eMMC user area and boot0/boot1 were captured read-only, hashed, compressed, and verified; p1–p6 match the first snapshot byte-for-byte. The raw and compressed images remain in the private archive.
 3. The complete UART trace was reconciled with host timestamps and updated in the protocol map. Keep the raw trace private; do not infer physical semantics from software correlation alone.
 4. Continue the local Odyssey work through the inert replay and in-memory raster transform; add no transport or output path until image/MCU synchronization and safe failure behavior are understood.
-5. Tomorrow, collect board/panel photos. Show a test pattern only after an independent method to keep UV and motion inactive has been identified and verified.
+5. Use the next physical session to collect only evidence that distinguishes current hypotheses; do not treat a photo of the operator UI as evidence about the exposure panel.
+
+## Next physical evidence session
+
+| Order | Evidence to collect | What it can close | What it cannot close / prerequisite |
+|---|---|---|---|
+| 1 | Photograph the operator touchscreen's About/version and printer-model pages, plus the final progress page from a normal job | Confirms what the HMI reports for build, selected model, and completion state; useful for checking whether runtime labels agree with the captured software profile | Does not identify the RGB cable pins, touch-controller silicon, or the monochrome exposure-panel image |
+| 2 | For a known ordinary print, retain the exact source job/layer privately and photograph the finished part with an orientation mark that is also present in an asymmetric source layer | Can validate end-to-end X/Y orientation and whether the triplet packing is consistent with the finished geometry, after accounting for the part's placement and any slicer transforms | Cannot recover channel-to-column grayscale transfer, gamma, panel part number, or the frame-latch/vsync point. Do not infer a pixel map from a symmetric object or from a UI screenshot. Do not photograph an illuminated exposure panel; use an ordinary enclosed print and inspect the finished part instead. |
+| 3 | If the owner later opens the unit, first disconnect mains and obtain sharp, uncropped photos of both sides of the control PCB, readable IC/connector silkscreens, and both ends of each screen cable | Can identify board revision/component markings and visually associate cable endpoints with labeled connectors | Photos alone do not prove continuity, voltage, active polarity, or exact MCU/panel pin assignments. The unit has not been opened; this is not a prerequisite for tomorrow's non-invasive observations. |
+| 4 | Only after endpoint and voltage are known, passively capture the main UART with a high-impedance logic analyzer during a normal job; do not attach a second serial reader | Can establish physical logic levels, idle polarity, exact bit timing, and confirm the software-derived framing on the wire | Does not prove the physical event behind `M114_DELATLIGHT_OVER`, the display latch point, or malformed-frame behavior. Board access and voltage identification are prerequisites. |
+| 5 | Defer actuator stimulus until outputs and safe fixture are understood | A guarded, controlled experiment could tie a command/state transition to a motor, sensor, fan, or light output | The completed normal-print trace already covers successful host/controller sequencing; a new print alone will not assign physical meaning to `Z/U/D`, GPIOA bit 5, PC13–PC15, or the TI-compatible I²C bytes. Do not inject commands or test UV output as part of the photo session. |
+
+The boot path is an offline/spare-target item, not a physical test on the only printer: the normal U-Boot path and vendor update writes are mapped, but BootROM selection and a recoverable rollback have not been demonstrated. Likewise, the eMMC snapshots cover the user area and boot0/boot1, not RPMB or volatile RAM; that capture boundary is documented in [the snapshot note](system-snapshot.md).
 
 ## Acceptance gates for a normal-print port
 
