@@ -97,6 +97,25 @@ The downloaded rootfs includes an STM32 updater and `V1-01.bin`, confirming a di
 
 These names are Linux driver/client labels observed under `/sys/bus/i2c/devices`; they are not all independently confirmed silicon part numbers.
 
+## Boot and storage map
+
+A read-only LAN session on 2026-09-29 confirmed an eMMC device `/dev/mmcblk0` with ten GPT partitions. The kernel command line names them `bootloader`, `env`, `env-redund`, `recovery`, `boot`, `rootfs`, `rootfs_data`, `misc`, `private`, and `UDISK` in order. `/proc/partitions` reports the following sizes in 1 KiB blocks:
+
+| Device | Name from kernel command line | Size (KiB) | Live role / mount |
+|---|---|---:|---|
+| `mmcblk0p1` | `bootloader` | 32,768 | Bootloader |
+| `mmcblk0p2` | `env` | 16,384 | Primary environment |
+| `mmcblk0p3` | `env-redund` | 16,384 | Redundant environment |
+| `mmcblk0p4` | `recovery` | 32,768 | Recovery image |
+| `mmcblk0p5` | `boot` | 32,768 | Boot image |
+| `mmcblk0p6` | `rootfs` | 158,720 | Read-only SquashFS mounted at `/rom` |
+| `mmcblk0p7` | `rootfs_data` | 69,120 | Writable ext4 overlay at `/overlay`, merged into `/` |
+| `mmcblk0p8` | `misc` | 16,384 | Not mounted in the observed session |
+| `mmcblk0p9` | `private` | 16,384 | VFAT mounted at `/device` |
+| `mmcblk0p10` | `UDISK` | 7,208,239 | ext4 mounted at `/mnt/UDISK` |
+
+The overlay filesystem had about 62 MiB total and 58 MiB available at capture time. A separate removable block device `/dev/sda1` (sysfs `removable=1`) was mounted as VFAT at `/mnt/exUDISK`; it reported 62,655,488 KiB total and about 60 GiB available. This is the USB mass-storage path. The rootfs was read-only; no partition or file was changed during this inspection. The kernel command line also reported `build_mode=test` and the product family `CL60R`; per-unit serial and network identifiers are intentionally omitted.
+
 ## Physical verification needed
 
 The printer has not been opened. The next useful evidence, if the owner later chooses to open it, is a sharp photo of both sides of the printer-control PCB, readable MCU and driver markings, and both screen cables at their connectors. Until then, PCB revision, cable destinations, connector pin numbers, and STM32 UART pins remain unconfirmed; the manual's port names and the live Linux-side interfaces are documented separately.
