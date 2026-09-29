@@ -77,6 +77,27 @@ The code constructs JSON strings for these fields; clients should not assume tha
 
 The recovered status reply builder includes `filename` but not `progress`. It also includes the current layer, total layer count, and remaining time. A read-only `GET_PRINT_STATUS` request to the live printer on 2026-09-29, using its locally configured token, was accepted; the response contained the fields listed above, and every value was a JSON string. The live response also omitted `progress`. No status values or token were retained in the public documentation.
 
+## Start, pause, stop, and parameter handlers (static only)
+
+The following behavior comes from the saved ARM ELF; these requests were not sent to the live printer. The library exposes a signal boundary to downstream `PrinterUI` code, so static behavior here does not establish the final UI or STM32 effect.
+
+`startPrint(QJsonObject)` parses `filename` and `token`, but only the filename is used in this handler. It first calls `getFilePrintStatus(filename, true)`. For a nonzero result it sends `{cmd:"START_PRINT", status:..., filename:...}`; result `6` maps to `PRINT_STOP`, and other nonzero results map to `PRINT_PROCESSING`, then the handler returns false. When that check is zero but the handler's internal state at `this+0x4c` is `2`, it replies `PRINT_COMPLETE` using the stored filename and returns false. Otherwise it sets that state to `2`, stores the request filename, sends an initial `PRINT_COMPLETE` reply, changes the current directory and `QFile` filename, then calls `checkFile`. A second reply maps the check result `1` to `PRINT_END`, `2` to `PRINT_PROCESSING`, and other values to `PRINT_FAIL`; afterward the state becomes `4` and the handler returns true. No direct printer-start or UART call appears in this method; what the caller does with the return value and downstream signals is not recovered here. Do not treat `START_PRINT` acceptance as proof that the STM32 was commanded to print.
+
+`printPause(QJsonObject)` and `printStop(QJsonObject)` both parse `filename` and `token`, but pass only the token to their corresponding server methods. The server emits a signal and maps its callback integer as `1 → 7`, `-1 → 6`, otherwise `8`. The handlers then use `TRANSCMD::valueToKey`: `6 → PRINT_PAUSE`, `7 → PRINT_STOP`, `8 → GET_PRINT_STATUS`. Thus the text reply retains its request command in `cmd`, while the `status` value is one of those enum names. The pause handler sets `this+0x4c` to `4`; stop sets it to `0`. Neither reply includes the parsed filename. These are recovered handler and callback-result branches; the downstream callback semantics and physical stop/pause behavior remain unknown.
+
+`setPrintPara(QJsonObject)` parses six parameter values as strings and also parses a token:
+
+| JSON key | `PrintStatusPara` byte offset |
+|---|---:|
+| `initExposure` | `+16` |
+| `delayLight` | `+20` |
+| `printExposure` | `+24` |
+| `printHeight` | `+28` |
+| `eleSpeed` | `+32` |
+| `bottomExposureNum` | `+36` |
+
+The handler passes a copy of that parameter object and the token to the server's `setPrintPara`, which emits `sigSetPrintPara`; this library path shows no parameter validation or direct serial write. It replies with `cmd:"PRINT_PARA_SET"`. The status construction is anomalous: the handler obtains a string from `getPrintStatusKey(para+48)` but does not insert it into the JSON; the `status` field instead comes from `TRANSCMD::valueToKey(para+52)`. The default constructor initializes `+48` to zero but leaves `+52` uninitialized, and the call operates on a copy. Therefore static analysis cannot establish a stable reply status value for this method. Do not infer success or failure from this field alone.
+
 ## Comparison with Creality-Control / Halot Box clients
 
 Creality-Control's public Home Assistant [status source](https://github.com/SiloCityLabs/Creality-Control/blob/main/custom_components/creality_control/__init__.py) opens `ws://host:18188/`, sends `GET_PRINT_STATUS` with a token, and expects `printStatus`, `filename`, `printRemainTime`, `progress`, `curSliceLayer`, and `sliceLayerCount`. Its [pause/stop buttons](https://github.com/SiloCityLabs/Creality-Control/blob/main/custom_components/creality_control/button.py) use the same `PRINT_PAUSE` and `PRINT_STOP` words. The CL-60 binary and a live authenticated status response confirm the same request, transport, token recipe, and all of these fields except `progress`.
@@ -113,8 +134,10 @@ When `received` reaches or exceeds the declared `size`, the handler closes and t
 | `CxFileTransHandle::onDisconnect()` | `0x1a678` | Closes the transfer and saves resume metadata |
 | `CxFileTransHandle::removePcModelFile(...)` | `0x1e588` | Removes `.cxdlp`, `.cxline`, and `.bak` files from the output directory |
 | `CxFileTransHandle::getPrintStatus(QJsonObject)` | `0x1c9a4` | Token-bearing status request and reply construction |
+| `CxFileTransHandle::startPrint(QJsonObject)` | `0x1b7e4` | File/state checks and `START_PRINT` replies; no direct start command in this method |
 | `CxFileTransHandle::printPause(QJsonObject)` | `0x1c334` | Pause command handler |
 | `CxFileTransHandle::printStop(QJsonObject)` | `0x1c66c` | Stop command handler |
+| `CxFileTransHandle::setPrintPara(QJsonObject)` | `0x1d274` | Parses six print parameters and emits server signal; reply status reads an uninitialized member |
 | `CxFileTransHandle::getPrintStatusKey(int)` | `0x1e400` | Print-state enum to string mapping |
 
 ## References
