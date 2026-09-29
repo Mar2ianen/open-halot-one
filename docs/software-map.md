@@ -5,6 +5,7 @@
 - SoC/target: Allwinner H616 (`sun50iw9`, device-tree compatible `allwinner,h616`). The processor exposes four ARM Cortex-A53 cores.
 - OS release file: TinaLinux `Neptune 272`, build timestamp `2023-09-04`, target `h616-p2/generic v2.1`, description `3.5.1`.
 - Kernel: Linux `4.9.170`, build `#700`, compiled 2023-09-04.
+- RAM: `/proc/meminfo` reported `996,368 KiB` total and `854,668 KiB` available in the sampled LAN session; the kernel command line requests a `64 MiB` CMA area.
 - Bootloader string in the kernel command line: U-Boot `2018.05`.
 - Init: OpenWrt-style `procd`; root filesystem is read-only SquashFS with an ext4 overlay.
 - UI: Qt 5 application at `/usr/bin/PrinterUI/PrinterUI`, with external Qt/QML resource bundles.
