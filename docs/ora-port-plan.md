@@ -52,7 +52,7 @@ On a newer kernel, the existing UI's vendor `/dev/disp` and `/dev/ion` assumptio
 ### 1. Define the ORA integration boundary
 
 - Ask ORA maintainers whether HALOT-specific code belongs in Odyssey, a printer-adapter repository, or a separate H616 host project.
-- Agree on the job format and division between the print engine, serial/control adapter, exposure-image output, and Orion UI. The current local reader is an unverified CXDLP v3 prototype and does not imply that Creality's format should become the ORA format.
+- Agree on the job format and division between the print engine, serial/control adapter, exposure-image output, and Orion UI. The local CXDLP v2/v3 reader has been checked against one private printer job, but it is not integrated with Odyssey or a general ORA job format. A separate static map of PioCreat's CXLINE v2 writer/reader now exists, but there is no `.cxline` fixture and no CXLINE parser. Neither Creality format should become the ORA format by default; see the [CXLINE v2 static map](cxline-v2-format.md).
 - Keep `open-halot-one` as the hardware research and bring-up record; submit implementation code only after the target repo and license are agreed.
 
 ### 2. Complete the hardware/software interface map
