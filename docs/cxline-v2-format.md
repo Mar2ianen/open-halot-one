@@ -43,6 +43,8 @@ This is serialization order, not a promise that every reader accepts malformed, 
 
 The object offsets above identify source members used by the writer. They are not absolute file offsets: the ordinary string has variable length, and the blocks are serialized field by field.
 
+**Header byte-order discrepancy:** the writer passes the three 16-bit fields at `+0x28/+0x2a/+0x2c` through the ordinary `FileWrite::operator<<(unsigned short)`, which writes in native little-endian order on this build when its default order fields match. The matching reader calls `readBigEndianUint16()` for those three values. A caller could pre-swap the values before writing, but that is not established from this wrapper. Treat these three fields as byte-order ambiguous until a real `.cxline` is compared; the first header word and the four image-parameter words use the ordinary reader/writer operators, while separators are explicitly big-endian.
+
 ## Parameters and delayed area table
 
 The `DlpParameters` writer emits three QAnsic strings, then eleven 16-bit values. It records the current file position and reserves `4 * layer_count + 2` bytes for the per-layer area values and their separator. At close, the writer seeks back to this position, writes one 32-bit value per layer, writes `0A 0D`, and restores the end position.
