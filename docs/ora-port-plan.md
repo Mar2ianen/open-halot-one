@@ -61,9 +61,9 @@ On a newer kernel, the existing UI's vendor `/dev/disp` and `/dev/ion` assumptio
 
 - **Closed protocol/hardware cases:**
   - `M678 L` physical event: dynamic settling threshold ($M/10 + 100 \times \lfloor\text{avg}(L)/1200\rfloor$ ticks) for Stefan adhesion compensation. State 8 asserts PC15 active-low hardware UV enable, sends DLPC347x I²C `0x36 0x52 0x04` (Blue/UV ON), and sets bit 1 on EventGroup `0x2000001c` (`M114_DELATLIGHT_OVER`).
-  - Physical motor units: `Z` in mm, `U` in mm/s, physical stepper scale is exactly **`12,800.0` steps/mm** (24 MHz base timer ARR calculation).
+  - Physical motor units: `Z` in mm (scaled by 100 on parse), `U` in mm/s, physical stepper scale is exactly **`12,800.0` steps/mm** (24 MHz base timer ARR calculation). Lead screw pitch is standard T8x2 ($H = 2\text{ mm}$), yielding a microstep acceleration ramp divisor of $256 / H = 128$ microsteps per table increment.
   - Stop/abort semantics: `M410 S0` (instant hard stop), `M410 S1` (1600-step deceleration ramp stop), `M410 S2` (print abort: TIM3 disabled, UV light forced OFF via I²C `0x52 0x00` and PC15=1, TIM1 disabled, print task suspended). All acknowledge with `M410_OK1\n`.
-  - Homing: `G0 Z%1 F%2 D%3 S%4 H%5` (D0=Down, D1=Up); halts on optical endstop PA5 (`M114_OK1`). Standard `G28` is not used.
+  - Homing and motion kinematics: `G0 Z%1 F%2 D%3 S%4 H%5 ` (D1=Up towards top endstop, D0=Down towards vat, S=ExternalMotor selector, H=HelicalPitch = 2 mm). Optical limit switch on **PA5 is strictly at the TOP of the Z-axis (upper limit switch)**; upward motion (`D1`) halts when `PA5 == 1`, emitting `M114_OK1\n`. Downward motion (`D0`) ignores PA5 and travels downward to the vat (`LevelHeight = 170\text{ mm}` from `CL60` machine profile). Standard `G28` is not used.
   - Startup I²C: `0x36 0x54 [30 0c 30 0c 30 0c]` establishes fixed baseline DAC current for Red, Green, and Blue on DLPC347x.
 - Keep the operator UI (`/dev/fb0` 800×480) and exposure display (ION → `/dev/disp` → HDMI → RK628 → MIPI DSI1 540×2560) strictly separate.
 - Capture only passive serial traffic first; do not probe by sending motion or UV commands during protocol discovery.
@@ -75,14 +75,22 @@ The HALOT architecture couples layer motion, hydrodynamic settling delay, UV exp
 2. **Safe M678 Layer Transaction & Fault Contract:** Wrap `M678` $\rightarrow$ `M114` polling $\rightarrow$ `M114_DELATLIGHT_OVER` $\rightarrow$ `M114_OK` into a single atomic transaction. Enforce safe cancellation/pause via `M410 S...` to ensure UV is physically deasserted on host fault or serial timeout.
 3. **Odyssey Integration Seam (`HalotTransactionBackend`):** Integrate with Odyssey's job lifecycle using a dedicated layer transaction boundary rather than Odyssey's split `move_z()`, `start_curing()`, `stop_curing()` primitives.
 
-### 4. Near-Term Milestone: `halot-inspect` ARMv7 on-device validation
+### 4. Near-Term Milestone: `halot-inspect` ARMv7 and `HalotTransport` architecture
 
 Prior to implementing an active actuator FSM, deploy an extended `halot-inspect` binary to the H616 target (TinaLinux procd runtime):
-- Verify ARMv7 hard-float ABI and glibc/dynamic linker compatibility.
-- Open `/dev/ttyS2` in passive read-only mode to verify banner/handshake reception without transmitting.
-- Probe `/dev/ion` and `/dev/disp` memory allocation interfaces.
-- Allocate and display a safe blank/test pattern with UV physically guaranteed off.
-- Benchmark and validate on-device CXDLP v2/v3 lazy decoding performance on Cortex-A53 cores.
+- **ABI & Runtime verification:** Verify ARMv7 hard-float ABI and glibc/dynamic linker compatibility under TinaLinux procd environment.
+- **Serial link verification (Passive):** Open `/dev/ttyS2` in passive read-only mode to verify banner/handshake reception without transmitting unverified bytes.
+- **Display allocation probe:** Probe `/dev/ion` and `/dev/disp` ioctl interfaces; allocate and display a safe blank/test pattern with UV physically guaranteed off.
+- **On-device decoding benchmark:** Benchmark on-device CXDLP v2/v3 lazy decoding performance on Cortex-A53 cores.
+
+#### `HalotTransport` Architecture
+To integrate cleanly with Odyssey's async runtime (`tokio-serial`), implement `HalotTransport` as an encapsulation layer:
+- `encode_101_byte_frame(cmd: &str) -> [u8; 101]`: Applies 96-byte padding, delimiter `[0x55, 0x55, 0x55, 0x55]`, and trailing `\n`.
+- `incremental_line_decoder()`: Decodes lines asynchronously, identifying `M114_Busy_*`, `M114_DELATLIGHT_OVER`, `M114_OK`, and `M114_OK1`.
+- `startup_handshake()`: Queries MCU version (`V114`), models (`GET MODELS`), and performs top reference homing (`G0 Z170 F3 D1 S1 H2`).
+- `m678_transaction()`: Atomic layer transaction orchestrating display latching, M678 execution, M114 polling, and UV-on synchronization.
+- `cancel_transaction()`: Emergency abort via `M410 S2`, turning off UV physically, followed by safe top carriage lift.
+- **Deployment Lifecycle:** TinaLinux uses OpenWrt-style `procd` with SquashFS + ext4 overlay. Packaging and running Odyssey requires an `/etc/init.d/odyssey` procd service script with clean, mutual-exclusion process management (never `killall -9`) ensuring guaranteed UV-off state on handover.
 
 ### 5. Port the board to mainline Linux
 

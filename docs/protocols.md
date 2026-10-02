@@ -271,15 +271,29 @@ Static analysis of the `M410` handler at `0x080060bc` maps all three sub-command
 - `M410 S1`: **Controlled deceleration motor stop** (`0x0800617e`). Configures deceleration buffer `[0x200001f0, #0x1b0] = 0x640` (1,600 ramp-down steps), starts TIM4, and polls until deceleration completes before returning.
 - `M410 S2`: **Emergency print abort** (`0x080060ec`). When in active printing state (`0x20000076 == 1`), immediately disables TIM3 (`0x40000400`), executes `FUN_08004510` (deasserts PC15 active-low UV enable to `1` and sends I²C `0x36 0x52 0x00` to turn OFF UV light), disables stepper PWM timer TIM1 (`0x40012c00`), resets GPIOA motor driver pins (`0x40010800`), clears all active print state flags (`0x20000068`, `0x20000077`, `0x20000078`, `0x20000074`, `0x20000076`, `0x20000075`), and suspends FreeRTOS print task `0x20000024` via `vTaskSuspend` (`0x080075f8`).
 
-### G0 Movement and Homing Protocol
+### G0 Movement, Homing, and Endstop Mechanics
 
-The printer does not use standard 3D-printer `G28` homing. Homing and travel use `G0`:
-- **Template:** `G0 Z%1 F%2 D%3 S%4 H%5`
-  - `Z`: Distance in mm (e.g. `Z170` for post-print top lift).
-  - `F`: Speed in mm/s (e.g. `F3`).
-  - `D`: Direction selector (`D1` = Up, `D0` = Down towards vat/home).
-  - `S`: Motor profile mode (`S1` = internal stepper helical pitch scale).
-  - `H`: Limit-stop mode. Upward or downward motion halts when optical endstop PA5 is asserted, terminating motion and signaling `M114_OK1\n`. Normal moves complete with `M114_OK\n`.
+The printer does not use standard 3D-printer `G28` homing. All axis travel and homing use vendor-framed `G0`:
+- **Command Template:** `G0 Z%1 F%2 D%3 S%4 H%5 `
+  - `Z`: Distance in millimeters (e.g. `Z170` for full stroke travel, `Z500` for make-zero travel limit). The parser scales this by $100.0$ (`0x40590000`) into internal $10\ \mu\text{m}$ units before passing to motor planners.
+  - `F`: Speed in millimeters per second (e.g. `F3` for 3 mm/s travel).
+  - `D`: Direction selector (`D1` = Upward towards the upper optical limit switch; `D0` = Downward towards the resin vat / floor).
+  - `S`: Motor profile selector (`S1` = external motor profile / pitch-scaled mode; `S0` = standard internal motor profile, default for `CL60`).
+  - `H`: **Helical lead screw pitch** in millimeters (`H2` = 2.0 mm pitch, matching the T8x2 lead screw defined in `halotMachine.xml` under `<HelicalPitch value="2"/>`). In STM32 firmware:
+    - `FUN_080036e0`: Calculates microstep acceleration ramp index divisor `[0x200001f0, #0x198] = (25600 / H) / 100 = 256 / H`. For $H = 2$, divisor is exactly `128` microsteps per full step. In the stepper pulse ISR (`0x08002708`), the ramp table index advances every `step_count / 128` pulses (`0x0800278c: udiv r0, r0, r1`).
+    - `FUN_08000fb8`: Calculates `[0x200001f0, #0x1b4] = (6400 / H) / 100 = 64 / H` (for $H = 2$, divisor is `32`).
+
+#### Optical Limit Switch PA5 (Upper Endstop)
+- The optical limit switch is connected to GPIOA bit 5 (**PA5**), physically mounted at the **TOP of the Z axis (upper limit)**.
+- **Upward motion (`D1`):** In the stepper ISR (`0x08002708`), when `GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5) == 1` and `Direction == 1` (`[0x200001f0, #0x1a0] == 1`), remaining steps are immediately cleared: `[0x200001f0, #0x194] = 0`. The motor halts instantly at the upper limit. In the G0 command parser (`0x0800604c`), if `D == 1` and `PA5 == 1`, upward movement is rejected before starting (`bne #0x8005f76`).
+- **Downward motion (`D0`):** Moves away from PA5 towards the vat. In the stepper ISR (`0x08002708`), PA5 is **NOT checked** when `Direction == 0` (`cmp r0, #1` fails, bypassing the limit check). Downward travel completes strictly when the requested step counter reaches zero.
+- **Status Reporting (`M114`):** At `0x08005fb6`, STM32 reads `GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5)`. If `PA5 == 1` (carriage at the top optical limit), it responds `M114_OK1\n`. If `PA5 == 0` (carriage down in the print area), it responds `M114_OK\n`. In the passive 1,591-layer print trace, all 1,591 layer completions return `M114_OK\n`; `M114_OK1\n` occurs strictly during initial startup homing and after final post-print lift.
+
+#### Physical Homing and Leveling Sequence
+The machine profile `CL60` in `halotMachine.xml` defines `LevelHeight=170` (170 mm total travel between the top optical limit switch and the vat floor):
+1. **Top Reference Homing:** Host sends `G0 Z170 F3 D1 S1 H2` (or `G0 Z500 F%1 D1 S0/S1 H%2` in `SerialPortMakeZeroLevel::getMotorMoveUpCommand`). The build platform moves UP until the carriage flag enters the top optical sensor (`PA5 = 1`). Stepper ISR clears remaining steps and halts. Host polls `M114` and receives `M114_OK1\n`.
+2. **Descent to Vat Origin:** Host sends `G0 Z170 F3 D0 S1 H2` (`D0` = down). Stepper ISR steps downward $170\text{ mm} \times 12,800\text{ steps/mm} = 2,176,000$ steps without checking PA5. Upon step completion, host polls `M114` and receives `M114_OK\n`.
+3. **Post-Print Terminal Lift:** Host sends `M410 S2` (disables TIM3, turns off UV, clears print flags, suspends print task), then sends `G0 Z170 F3 D1 S1 H2` (`D1` = up). Carriage lifts to the top, trips `PA5 = 1`, halts, and emits `M114_OK1\n`.
 
 ### DLPC347x Startup I²C Current Baseline
 

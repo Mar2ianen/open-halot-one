@@ -84,6 +84,28 @@ Creality lists replacement part `4002010045` as `HALOT-ONE Mainboard Kit_2.0_32_
 
 The downloaded rootfs includes an STM32 updater and `V1-01.bin`, confirming a distinct STM32 application firmware path. Its startup script selects the H616 UART `/dev/ttyS2` for this product and toggles H616-side GPIOs `PA6` (BOOT0) and `PA0` (reset) when entering the STM32 ROM updater. The exact MCU part number, clock, PCB revision, board connector, MCU UART pins, voltage levels, and electrical assignments have not been confirmed on this unit. The `A4988` designation is part of the vendor's replacement-board name; it does not establish the exact number of populated driver chips or connector pinout on this PCB revision.
 
+## STM32 microcontroller and motion/actuator interface
+
+Static disassembly and register tracing of `V1-01.bin` and the machine configuration profile `CL60` in `halotMachine.xml` map the physical actuator interfaces:
+
+| Pin / Peripheral | Direction | Active level | Function / Physical role |
+|---|---|---|---|
+| `PA5` | Input (GPIOA) | High (`1`) | **Z-axis upper optical limit switch (endstop)**. Physically mounted at the **TOP** of the Z-axis rail. When moving UP (`D1`), asserting PA5 clears remaining steps to 0 in stepper ISR (`0x08002708`), halting motor immediately and signaling `M114_OK1\n`. Downward motion (`D0`) ignores PA5. |
+| `PC15` | Output (GPIOC) | Low (`0`) | **Hardware UV LED enable gate** (`0x422201bc`). Software sets `PC15 = 0` during exposure (State 8), and `PC15 = 1` during travel/idle/abort (`M410 S2`). |
+| `PC13` / `PC14` | Output (GPIOC) | – | Auxiliary GPIOC outputs (`0x422201b4` / `0x422201b8`). |
+| `I2C1` (`0x36`) | Master | – | Texas Instruments DLPC347x display controller / LED driver endpoint. Startup opcode `0x54` sets 12-bit DAC current baseline (`[0x30, 0x0c, 0x30, 0x0c, 0x30, 0x0c]`); opcode `0x52` gates LED channels (`0x04` = Blue/UV ON, `0x00` = OFF). |
+| `USART1` | Bidirectional | 115200 8N1 | Main command link connected to Allwinner H616 UART2 (`/dev/ttyS2`). Uses 101-byte vendor framing with four `0x55` delimiter bytes and trailing `\n`. |
+| `USART2` / `USART3` | Bidirectional | 115200 8N1 | Auxiliary UART channels (accessories / model detection). |
+| `TIM1` / `TIM2` | Internal | 24 MHz base | Stepper PWM pulse generator and step counter. Base clock `24,000,000 Hz`; auto-reload period $\text{ARR} = 24,000,000 / (12800 \times U)$. Acceleration ramp divisor is $256 / H = 128$ microsteps per full step. |
+| `TIM3` | Internal | 100 Hz (10 ms) | Exposure duration and hydrodynamic settling delay timer. Threshold = $M/10 + 100 \times \lfloor\text{avg}(L)/1200\rfloor$ ticks. |
+| `TIM4` | Internal | – | Motion deceleration stop timer (`M410 S1` 1,600-step ramp-down). |
+
+### Physical Kinematics
+- **Z-axis resolution:** Exactly `12,800.0` steps/mm (200 full steps/rev, 1/128 microstepping, 2 mm lead pitch).
+- **Lead screw pitch ($H$):** Standard T8x2 lead screw (`HelicalPitch = 2` mm).
+- **Leveling stroke (`LevelHeight`):** 170 mm travel from the top optical endstop (PA5) down to the vat zero plane.
+
+
 ## Linux-side buses observed
 
 | Bus/device | Live name | Current interpretation |
