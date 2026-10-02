@@ -96,9 +96,9 @@ Static disassembly and register tracing of `V1-01.bin` and the machine configura
 | `I2C1` (`0x36`) | Master | – | Texas Instruments DLPC347x display controller / LED driver endpoint. Startup opcode `0x54` sets 12-bit DAC current baseline (`[0x30, 0x0c, 0x30, 0x0c, 0x30, 0x0c]`); opcode `0x52` gates LED channels (`0x04` = Blue/UV ON, `0x00` = OFF). |
 | `USART1` | Bidirectional | 115200 8N1 | Main command link connected to Allwinner H616 UART2 (`/dev/ttyS2`). Uses 101-byte vendor framing with four `0x55` delimiter bytes and trailing `\n`. |
 | `USART2` / `USART3` | Bidirectional | 115200 8N1 | Auxiliary UART channels (accessories / model detection). |
-| `TIM1` / `TIM2` | Internal | 24 MHz base | Stepper PWM pulse generator and step counter. Base clock `24,000,000 Hz`; auto-reload period $\text{ARR} = 24,000,000 / (12800 \times U)$. Acceleration ramp divisor is $256 / H = 128$ microsteps per full step. |
-| `TIM3` | Internal | 100 Hz (10 ms) | Exposure duration and hydrodynamic settling delay timer. Threshold = $M/10 + 100 \times \lfloor\text{avg}(L)/1200\rfloor$ ticks. |
-| `TIM4` | Internal | – | Motion deceleration stop timer (`M410 S1` 1,600-step ramp-down). |
+| `TIM4` | Internal | Active CL-60 | **Active stepper motor pulse generator for `CL60`** (`S1` internal motor mode, `0x08000fb8` / `0x08002a60`). Toggles PB6 (`0x42218198`) for step pulses and PB3 (`0x4221818c`) for direction. Ramp divisor is $64 / H = 32$ (for $H=2$). When PA5 is tripped during homing, loads 1,600 deceleration steps (`0x640`) for a controlled ramp-down stop. |
+| `TIM1` / `TIM2` | Internal | 24 MHz base | Stepper pulse generator for alternate external-motor mode (`S0`, `0x080036e0` / `0x08002708`). Step on PB8, dir on PB9. Ramp divisor is $256 / H = 128$. When PA5 is tripped, remaining steps are zeroed immediately. |
+| `TIM3` | Internal | 100 Hz (10 ms) | Exposure duration and hydrodynamic settling delay timer. Threshold = $M/10 + 100 \times \lfloor\text{avg}(L)/1200\rfloor$ ticks. State 8 triggers `M114_DELATLIGHT_OVER`, asserts PC15=0, and turns on DLPC347x UV LED. |
 
 ### Physical Kinematics
 - **Z-axis resolution:** Exactly `12,800.0` steps/mm (200 full steps/rev, 1/128 microstepping, 2 mm lead pitch).
