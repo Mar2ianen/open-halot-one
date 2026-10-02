@@ -90,10 +90,10 @@ Static disassembly and register tracing of `V1-01.bin` and the machine configura
 
 | Pin / Peripheral | Direction | Active level | Function / Physical role |
 |---|---|---|---|
-| `PA5` | Input (GPIOA) | High (`1`) | **Z-axis upper optical limit switch (endstop)**. Physically mounted at the **TOP** of the Z-axis rail. When moving UP (`D1`), asserting PA5 clears remaining steps to 0 in stepper ISR (`0x08002708`), halting motor immediately and signaling `M114_OK1\n`. Downward motion (`D0`) ignores PA5. |
+| `PA5` | Input (GPIOA) | High (`1`) | **Z-axis upper optical limit switch (endstop)**. Physically mounted at the **TOP** of the Z-axis rail. When moving UP (`D1`), asserting PA5 triggers a 1,600-step controlled deceleration ramp in active TIM4 ISR (`0x08002a60`) or clears remaining steps to 0 in alternate TIM2 ISR (`0x08002708`), halting motor and signaling `M114_OK1\n`. Downward motion (`D0`) ignores PA5. |
 | `PC15` | Output (GPIOC) | Low (`0`) | **Hardware UV LED enable gate** (`0x422201bc`). Software sets `PC15 = 0` during exposure (State 8), and `PC15 = 1` during travel/idle/abort (`M410 S2`). |
 | `PC13` / `PC14` | Output (GPIOC) | – | Auxiliary GPIOC outputs (`0x422201b4` / `0x422201b8`). |
-| `I2C1` (`0x36`) | Master | – | Texas Instruments DLPC347x display controller / LED driver endpoint. Startup opcode `0x54` sets 12-bit DAC current baseline (`[0x30, 0x0c, 0x30, 0x0c, 0x30, 0x0c]`); opcode `0x52` gates LED channels (`0x04` = Blue/UV ON, `0x00` = OFF). |
+| `I2C1` (`0x36`) | Master | – | TI DLPC347x-compatible display controller / LED driver endpoint. Startup opcode `0x54` sends current command payload `[0x30, 0x0c, 0x30, 0x0c, 0x30, 0x0c]`; opcode `0x52` gates LED channels (`0x04` = Blue/UV ON, `0x00` = OFF). Format indicates DLPC347x command compatibility, though physical current calibration requires hardware validation. |
 | `USART1` | Bidirectional | 115200 8N1 | Main command link connected to Allwinner H616 UART2 (`/dev/ttyS2`). Uses 101-byte vendor framing with four `0x55` delimiter bytes and trailing `\n`. |
 | `USART2` / `USART3` | Bidirectional | 115200 8N1 | Auxiliary UART channels (accessories / model detection). |
 | `TIM4` | Internal | Active CL-60 | **Active stepper motor pulse generator for `CL60`** (`S1` internal motor mode, `0x08000fb8` / `0x08002a60`). Toggles PB6 (`0x42218198`) for step pulses and PB3 (`0x4221818c`) for direction. Ramp divisor is $64 / H = 32$ (for $H=2$). When PA5 is tripped during homing, loads 1,600 deceleration steps (`0x640`) for a controlled ramp-down stop. |
@@ -101,9 +101,10 @@ Static disassembly and register tracing of `V1-01.bin` and the machine configura
 | `TIM3` | Internal | 100 Hz (10 ms) | Exposure duration and hydrodynamic settling delay timer. Threshold = $M/10 + 100 \times \lfloor\text{avg}(L)/1200\rfloor$ ticks. State 8 triggers `M114_DELATLIGHT_OVER`, asserts PC15=0, and turns on DLPC347x UV LED. |
 
 ### Physical Kinematics
-- **Z-axis resolution:** Exactly `12,800.0` steps/mm (200 full steps/rev, 1/128 microstepping, 2 mm lead pitch).
-- **Lead screw pitch ($H$):** Standard T8x2 lead screw (`HelicalPitch = 2` mm).
-- **Leveling stroke (`LevelHeight`):** 170 mm travel from the top optical endstop (PA5) down to the vat zero plane.
+- **Active CL-60 internal Z-axis resolution:** **`1,600.0` steps/mm** (`S1` / `TIM4` on PB6/PB3: 200 full steps/rev, 2 mm pitch $\implies$ 100 full steps/mm $\times$ 1/16 microstepping = 1,600 steps/mm; acceleration ramp divisor $64/H = 32$; timer period $\text{ARR} = 5000 / U$).
+- **Alternate external motor Z-axis resolution:** `12,800.0` steps/mm (`S0` / `TIM2` on PB8/PB9: 100 full steps/mm $\times$ 1/128 microstepping = 12,800 steps/mm; ramp divisor $256/H = 128$; timer period $\text{ARR} = 24,000,000 / (12800 \times U)$).
+- **Lead screw pitch ($H$):** Standard T8x2 lead screw (`HelicalPitch = 2` mm in `halotMachine.xml`).
+- **Leveling stroke (`LevelHeight`):** 170 mm travel from the top optical endstop (PA5) down to the vat zero plane ($170\text{ mm} \times 1,600\text{ steps/mm} = 272,000\text{ steps}$ for active `CL60`).
 
 
 ## Linux-side buses observed
