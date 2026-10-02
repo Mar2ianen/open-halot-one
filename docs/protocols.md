@@ -256,7 +256,35 @@ The post-print `cxpmRunning.log` contains 1,592 M678 command-builder log entries
 | `M` | `0x200000d8` | Parsed binary64 copied directly |
 | `L` | `0x200000e0` | Parsed binary64 copied directly |
 
-The worker `FUN_080046f0` (called by the run-print task at `0x08007038`) gives a more specific dataflow. In state 0 (`0x0800471e`–`0x08004748`), it passes `Z` and `U` to `FUN_08000fb8` when byte `0x20000095` is nonzero, otherwise to `FUN_080036e0`; both helpers convert the doubles to integer timer/profile values and update the timer block at `0x200001f0`, with model-specific timer registers including `0x40000828` or `0x40000028`. The timer service functions `FUN_08002a60` and `FUN_08002708` consume those values and write the compare registers at those offsets while toggling raw bit-band aliases `0x42218198` or `0x422181a0`. In state 2 (`0x08004772`–`0x08004820`), the worker adds `T` to `Z` using the software double-add entry at `0x080003b2`, then passes `Z + T` with `U` to the selected helper. The zero-flag branch also uses `T × 64` to update the worker's `+0x1a4/+0x1a8` counters before passing `Z + T` and `U` to `FUN_080036e0`. This establishes timer and bit-band operations, but not board-level step/direction pin assignments or physical units for these values.
+The worker `FUN_080046f0` (called by the run-print task at `0x08007038`) gives a more specific dataflow. In state 0 (`0x0800471e`–`0x08004748`), it passes `Z` and `U` to `FUN_08000fb8` when byte `0x20000095` is nonzero, otherwise to `FUN_080036e0`; both helpers convert the doubles to integer timer/profile values and update the timer block at `0x200001f0`, with model-specific timer registers including `0x40000828` or `0x40000028`. The timer service functions `FUN_08002a60` and `FUN_08002708` consume those values and write the compare registers at those offsets while toggling raw bit-band aliases `0x42218198` or `0x422181a0`. In state 2 (`0x08004772`–`0x08004820`), the worker adds `T` to `Z` using the software double-add entry at `0x080003b2`, then passes `Z + T` with `U` to the selected helper. The zero-flag branch also uses `T × 64` to update the worker's `+0x1a4/+0x1a8` counters before passing `Z + T` and `U` to `FUN_080036e0`.
+
+Decompilation of `FUN_080036e0` and `FUN_08000fb8` completely resolves the physical units and motor scale:
+- `Z` is in **millimeters (mm)** (lift distance). The parser's `Z × 100.0` converts this to $10\ \mu\text{m}$ internal units, which the motion planner scales by 128 microsteps.
+- `U` is in **millimeters per second (mm/s)** (lift speed).
+- The physical Z-axis resolution is exactly **`12,800.0` steps/mm** (constant `0x40c90000` loaded at `0x0800371a`), corresponding to a 200 full-step motor with 1/128 microstepping on a 2 mm lead pitch.
+- Step pulse frequency is $f_{\text{step}} = U \times 12800\text{ Hz}$, and timer period is derived from base clock $24,000,000\text{ Hz}$ (constant `0x4176e360` loaded at `0x0800373e`): $\text{ARR} = 24,000,000 / (12800 \times U)$.
+
+### M410 Stop and Emergency Abort Semantics
+
+Static analysis of the `M410` handler at `0x080060bc` maps all three sub-commands, all acknowledging with `M410_OK1\n`:
+- `M410 S0`: **Immediate hard motor stop** (`0x0800619e`). Disables TIM4 (`0x40000800`), zeroes remaining move step counter `[0x200001f0, #0x1b0]`, and halts stepping instantly without deceleration.
+- `M410 S1`: **Controlled deceleration motor stop** (`0x0800617e`). Configures deceleration buffer `[0x200001f0, #0x1b0] = 0x640` (1,600 ramp-down steps), starts TIM4, and polls until deceleration completes before returning.
+- `M410 S2`: **Emergency print abort** (`0x080060ec`). When in active printing state (`0x20000076 == 1`), immediately disables TIM3 (`0x40000400`), executes `FUN_08004510` (deasserts PC15 active-low UV enable to `1` and sends I²C `0x36 0x52 0x00` to turn OFF UV light), disables stepper PWM timer TIM1 (`0x40012c00`), resets GPIOA motor driver pins (`0x40010800`), clears all active print state flags (`0x20000068`, `0x20000077`, `0x20000078`, `0x20000074`, `0x20000076`, `0x20000075`), and suspends FreeRTOS print task `0x20000024` via `vTaskSuspend` (`0x080075f8`).
+
+### G0 Movement and Homing Protocol
+
+The printer does not use standard 3D-printer `G28` homing. Homing and travel use `G0`:
+- **Template:** `G0 Z%1 F%2 D%3 S%4 H%5`
+  - `Z`: Distance in mm (e.g. `Z170` for post-print top lift).
+  - `F`: Speed in mm/s (e.g. `F3`).
+  - `D`: Direction selector (`D1` = Up, `D0` = Down towards vat/home).
+  - `S`: Motor profile mode (`S1` = internal stepper helical pitch scale).
+  - `H`: Limit-stop mode. Upward or downward motion halts when optical endstop PA5 is asserted, terminating motion and signaling `M114_OK1\n`. Normal moves complete with `M114_OK\n`.
+
+### DLPC347x Startup I²C Current Baseline
+
+At startup, `FUN_08006bca` / `FUN_08006cf0` sends I²C opcode `0x54` to DLPC347x address `0x36` with 6-byte payload `[0x30, 0x0c, 0x30, 0x0c, 0x30, 0x0c]` (fixed baseline 12-bit DAC current `0x0c30` for Red, Green, and Blue channels). Physical UV radiation is gated by active-low pin PC15 (enabling the constant-current LED driver hardware) and synchronized with DLPC347x Blue-channel enable `0x36 0x52 0x04` / `0x00`.
+
 
 In state 4 (`0x08004870`–`0x08004906`), `L` is converted to an integer and placed in a ten-word ring/history area at `0x200000e8`–`0x2000010c`; the worker maintains its average at `0x20000110`. When the new sample is below the stored average it fills all ten entries with that sample; otherwise it sums the ten entries. It increments the sample index at `0x20000093` and stores `sum / 10` as the new average. In the timer setup (`0x08004914`–`0x080049aa`, only when `0x20000078 == 0`), software double division converts `M/10` and `P/10`, then computes:
 $$\text{ExtraDelay}(\text{ticks}) = 100 \times \left\lfloor \frac{\text{average}(L)}{1200} \right\rfloor$$

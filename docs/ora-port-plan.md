@@ -59,23 +59,30 @@ On a newer kernel, the existing UI's vendor `/dev/disp` and `/dev/ion` assumptio
 
 ### 2. Complete the hardware/software interface map
 
-- Finish residual protocol/UI cases: MengTool's endpoint and `ASK_DATA` response format, the physical meanings of the recovered GPIO/PWM and `M410` register operations, why layer zero's `M678 L` uses a geometry-derived value, and what physical event the filtered-area timer thresholds represent.
-- Reproduce PrinterUI's 1620-to-540 layer packing and confirm how RGB channels map to monochrome columns; capture image/output timing relative to STM32 exposure commands.
-- Keep the operator UI and exposure display as separate pipelines. The exposure route is traced through the RK628 to DSI1, while the physical panel FPC and exact pixel mapping remain open.
+- **Closed protocol/hardware cases:**
+  - `M678 L` physical event: dynamic settling threshold ($M/10 + 100 \times \lfloor\text{avg}(L)/1200\rfloor$ ticks) for Stefan adhesion compensation. State 8 asserts PC15 active-low hardware UV enable, sends DLPC347x I²C `0x36 0x52 0x04` (Blue/UV ON), and sets bit 1 on EventGroup `0x2000001c` (`M114_DELATLIGHT_OVER`).
+  - Physical motor units: `Z` in mm, `U` in mm/s, physical stepper scale is exactly **`12,800.0` steps/mm** (24 MHz base timer ARR calculation).
+  - Stop/abort semantics: `M410 S0` (instant hard stop), `M410 S1` (1600-step deceleration ramp stop), `M410 S2` (print abort: TIM3 disabled, UV light forced OFF via I²C `0x52 0x00` and PC15=1, TIM1 disabled, print task suspended). All acknowledge with `M410_OK1\n`.
+  - Homing: `G0 Z%1 F%2 D%3 S%4 H%5` (D0=Down, D1=Up); halts on optical endstop PA5 (`M114_OK1`). Standard `G28` is not used.
+  - Startup I²C: `0x36 0x54 [30 0c 30 0c 30 0c]` establishes fixed baseline DAC current for Red, Green, and Blue on DLPC347x.
+- Keep the operator UI (`/dev/fb0` 800×480) and exposure display (ION → `/dev/disp` → HDMI → RK628 → MIPI DSI1 540×2560) strictly separate.
 - Capture only passive serial traffic first; do not probe by sending motion or UV commands during protocol discovery.
 
-### 3. Build a host-side HALOT adapter
+### 3. Build a host-side HALOT adapter and verify the Three Acceptance Boundaries
 
-- Define a HALOT transport interface for the known `/dev/ttyS2` framing and response parsing; keep it mock-only until the command allowlist and safe-failure contract are reviewed.
-- Connect the existing CXDLP adapter to job selection or adopt an agreed ORA job format. Keep the dimension-preserving path separate from Odyssey's current PNG-assuming framebuffer path.
-- Extend the pure layer scheduler into a transaction model for ordered frame submission, M678, replies, cancellation, and timeouts before adding any device backend.
+The HALOT architecture couples layer motion, hydrodynamic settling delay, UV exposure, and lift into a single atomic controller transaction (`M678`). To build a faithful port without breaking this state machine, three core boundaries must be satisfied:
+1. **Physical Display Submission & Synchronization:** Guarantee that subpixel-triplet BGRA frames (540×2560) written to ION and applied via `/dev/disp` (ioctl `0x42`/`0x43`) are fully latched by the RK628 bridge before STM32 transitions to exposure (`M114_DELATLIGHT_OVER`).
+2. **Safe M678 Layer Transaction & Fault Contract:** Wrap `M678` $\rightarrow$ `M114` polling $\rightarrow$ `M114_DELATLIGHT_OVER` $\rightarrow$ `M114_OK` into a single atomic transaction. Enforce safe cancellation/pause via `M410 S...` to ensure UV is physically deasserted on host fault or serial timeout.
+3. **Odyssey Integration Seam (`HalotTransactionBackend`):** Integrate with Odyssey's job lifecycle using a dedicated layer transaction boundary rather than Odyssey's split `move_z()`, `start_curing()`, `stop_curing()` primitives.
 
-### 4. Bring up ORA userspace on stock kernel
+### 4. Near-Term Milestone: `halot-inspect` ARMv7 on-device validation
 
-- Determine the stock userspace ABI, available runtime libraries, service manager, and graphics interfaces.
-- Build the backend for the actual target ABI; expose it as a service with explicit safe startup/shutdown behavior.
-- Test Orion on the operator display as a separate task. Keep the existing Creality UI launchable until the replacement is stable.
-- Keep the operator UI and exposure output separate: `/dev/fb0` is the 800×480 touch UI, while the current exposure path runs through the H616 HDMI output and RK628 DSI1 bridge.
+Prior to implementing an active actuator FSM, deploy an extended `halot-inspect` binary to the H616 target (TinaLinux procd runtime):
+- Verify ARMv7 hard-float ABI and glibc/dynamic linker compatibility.
+- Open `/dev/ttyS2` in passive read-only mode to verify banner/handshake reception without transmitting.
+- Probe `/dev/ion` and `/dev/disp` memory allocation interfaces.
+- Allocate and display a safe blank/test pattern with UV physically guaranteed off.
+- Benchmark and validate on-device CXDLP v2/v3 lazy decoding performance on Cortex-A53 cores.
 
 ### 5. Port the board to mainline Linux
 
