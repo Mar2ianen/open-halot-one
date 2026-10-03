@@ -86,25 +86,25 @@ The downloaded rootfs includes an STM32 updater and `V1-01.bin`, confirming a di
 
 ## STM32 microcontroller and motion/actuator interface
 
-Static disassembly and register tracing of `V1-01.bin` and the machine configuration profile `CL60` in `halotMachine.xml` map the physical actuator interfaces:
+Static disassembly maps firmware-side GPIO, timer, and serial activity. It does not establish which MCU pins are connected to which physical board nets, drivers, sensors, or optical hardware; this unit has not been opened.
 
-| Pin / Peripheral | Direction | Active level | Function / Physical role |
-|---|---|---|---|
-| `PA5` | Input (GPIOA) | High (`1`) | **Z-axis upper optical limit switch (endstop)**. Physically mounted at the **TOP** of the Z-axis rail. When moving UP (`D1`), asserting PA5 triggers a 1,600-step controlled deceleration ramp in active TIM4 ISR (`0x08002a60`) or clears remaining steps to 0 in alternate TIM2 ISR (`0x08002708`), halting motor and signaling `M114_OK1\n`. Downward motion (`D0`) ignores PA5. |
-| `PC15` | Output (GPIOC) | Low (`0`) | **Hardware UV LED enable gate** (`0x422201bc`). Software sets `PC15 = 0` during exposure (State 8), and `PC15 = 1` during travel/idle/abort (`M410 S2`). |
-| `PC13` / `PC14` | Output (GPIOC) | – | Auxiliary GPIOC outputs (`0x422201b4` / `0x422201b8`). |
-| `I2C1` (`0x36`) | Master | – | TI DLPC347x-compatible display controller / LED driver endpoint. Startup opcode `0x54` sends current command payload `[0x30, 0x0c, 0x30, 0x0c, 0x30, 0x0c]`; opcode `0x52` gates LED channels (`0x04` = Blue/UV ON, `0x00` = OFF). Format indicates DLPC347x command compatibility, though physical current calibration requires hardware validation. |
-| `USART1` | Bidirectional | 115200 8N1 | Main command link connected to Allwinner H616 UART2 (`/dev/ttyS2`). Uses 101-byte vendor framing with four `0x55` delimiter bytes and trailing `\n`. |
-| `USART2` / `USART3` | Bidirectional | 115200 8N1 | Auxiliary UART channels (accessories / model detection). |
-| `TIM4` | Internal | Active CL-60 | **Active stepper motor pulse generator for `CL60`** (`S1` internal motor mode, `0x08000fb8` / `0x08002a60`). Toggles PB6 (`0x42218198`) for step pulses and PB3 (`0x4221818c`) for direction. Ramp divisor is $64 / H = 32$ (for $H=2$). When PA5 is tripped during homing, loads 1,600 deceleration steps (`0x640`) for a controlled ramp-down stop. |
-| `TIM1` / `TIM2` | Internal | 24 MHz base | Stepper pulse generator for alternate external-motor mode (`S0`, `0x080036e0` / `0x08002708`). Step on PB8, dir on PB9. Ramp divisor is $256 / H = 128$. When PA5 is tripped, remaining steps are zeroed immediately. |
-| `TIM3` | Internal | 100 Hz (10 ms) | Exposure duration and hydrodynamic settling delay timer. Threshold = $M/10 + 100 \times \lfloor\text{avg}(L)/1200\rfloor$ ticks. State 8 triggers `M114_DELATLIGHT_OVER`, asserts PC15=0, and turns on DLPC347x UV LED. |
+| Pin / Peripheral | Firmware observation | Physical interpretation and confidence |
+|---|---|---|
+| PA5 | GPIOA bit 5 is sampled by M114 and the motion paths. A high sample selects M114_OK1; homing logic checks it during upward motion. | Consistent with an upper travel-reference input from host command names and control flow. Sensor type, physical location, electrical polarity, and board net are unverified. |
+| PC15 | Firmware writes GPIOC ODR bit 15 through alias 0x422201bc. The M678 callbacks and busy S2 path include low/high writes. | A software-controlled output associated with the exposure state. Its load, active polarity at the board, and physical UV effect are unverified. |
+| PC13 / PC14 | Firmware writes GPIOC ODR bits through aliases 0x422201b4 / 0x422201b8 in output handlers. | Board nets and attached loads are unknown. |
+| GPIOB PB10/PB11 | MODELS:A paths use a software-generated I2C-style transfer; startup and output routines send records beginning with 0x36 and opcodes 0x54 or 0x52. | The byte sequence fingerprints TI DLPC347x commands, but the physical bus, silicon identity, and connection to the exposure panel or UV source are unverified. Do not label this I2C1 or a confirmed LED-driver endpoint. |
+| USART1 | Firmware configures the main application command channel at 115200 8N1; the H616 device tree maps Linux /dev/ttyS2 to UART2. | The software endpoint is confirmed by the device trace. The board interconnect, MCU/SoC pin wiring, and voltage levels were not measured electrically. |
+| USART2 / USART3 | Firmware has auxiliary serial and model-dependent relay paths. | Accessory identity and physical connectors remain unknown. |
+| TIM4 and GPIOB PB6/PB3 | The CL60 profile selects the internal planner; its timer ISR updates timer registers and toggles GPIO bit-band aliases corresponding to PB6/PB3. | Firmware pulse/direction candidates only. The actual motor driver connection and mechanical response are unverified. |
+| TIM2 and GPIOB PB8/PB9 | The alternate planner configures the TIM2 path and uses GPIO bit-band aliases corresponding to PB8/PB9. | Firmware pulse/direction candidates only. The external driver connection is unverified. |
+| TIM3 | The M678 worker configures a phase timer. Its threshold formula includes M/10 + 100 × floor(avg(L)/1200) and P/10. | If HSE is 8 MHz, the configured clocking gives a nominal 100 Hz tick; the oscillator frequency has not been measured. The formula is established in code, but its physical time and resin-process interpretation are not calibrated. |
 
-### Physical Kinematics
-- **Active CL-60 internal Z-axis resolution:** **`1,600.0` steps/mm** (`S1` / `TIM4` on PB6/PB3: 200 full steps/rev, 2 mm pitch $\implies$ 100 full steps/mm $\times$ 1/16 microstepping = 1,600 steps/mm; acceleration ramp divisor $64/H = 32$; timer period $\text{ARR} = 5000 / U$).
-- **Alternate external motor Z-axis resolution:** `12,800.0` steps/mm (`S0` / `TIM2` on PB8/PB9: 100 full steps/mm $\times$ 1/128 microstepping = 12,800 steps/mm; ramp divisor $256/H = 128$; timer period $\text{ARR} = 24,000,000 / (12800 \times U)$).
-- **Lead screw pitch ($H$):** Standard T8x2 lead screw (`HelicalPitch = 2` mm in `halotMachine.xml`).
-- **Leveling stroke (`LevelHeight`):** 170 mm travel from the top optical endstop (PA5) down to the vat zero plane ($170\text{ mm} \times 1,600\text{ steps/mm} = 272,000\text{ steps}$ for active `CL60`).
+### Firmware motion scale (not mechanically measured)
+
+- The internal CL60 planner computes a command pulse count equivalent to 1,600 counts per configured millimeter when H=2; its timer formula is ARR=5000/U. The 1/16 microstep explanation assumes a 200-step motor and a 2 mm lead pitch; the driver mode has not been inspected.
+- The alternate planner computes 12,800 counts per configured millimeter at H=2. The 1/128 microstep explanation is likewise an inference, not a board measurement.
+- halotMachine.xml sets HelicalPitch=2 and LevelHeight=170 for the CL60 profile. These values do not prove the installed screw pitch or calibrated physical travel between a sensor and the vat.
 
 
 ## Linux-side buses observed

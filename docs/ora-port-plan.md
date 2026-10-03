@@ -21,7 +21,7 @@ The ORA contact page directs project requests to the relevant repository's GitHu
 | Host | Allwinner H616, TinaLinux, vendor Linux `4.9.170`, U-Boot `2018.05` | A HALOT board DTS, supported boot-image packaging, active/fallback boot path, and a proven rollback route |
 | Operator UI | Display engine reports an `800x480@59` RGB24 screen; touch controller appears at I²C3 `0x38` | Panel timing/power details for a mainline DTS; mapping and calibration of all touch events under the new UI |
 | Exposure display | Active path is H616 HDMI output at 540×2560 → RK628 HDMI RX at I²C2 `0x50` → MIPI DSI1 at 4 × 840 Mb/s; `dsi_err=0`. Static `CL60R` type-1 timing lookup selects 540×2560 at 112 MHz, separately from the HDMI-path `src`/`dst` report. The I²C0 `dlp1438` driver rejects this product (`-22`). | Effective runtime DSI timing override, physical FPC trace, exact pixel-to-column mapping, layer-to-VSYNC synchronization, error recovery, and a mainline RK628/panel driver |
-| Control MCU | PrinterUI and the startup updater use `/dev/ttyS2`; application link is 115200 8N1; fixed 101-byte framing; `M678` storage/state flow; physical units `Z` (mm), `U` (mm/s), `D` (dead); `L` Stefan adhesion settling formula ($M/10 + 100 \times \lfloor\text{avg}(L)/1200\rfloor$); `P`/`M` ms units; `M410 S0/S1/S2` stop/abort semantics; `PA5` upper optical endstop; active internal motor 1,600 steps/mm on TIM4 PB6/PB3. | Exact display-to-MCU gate; electrical levels and board connector wiring for PC13–PC15; MengTool endpoint/`ASK_DATA` reply format; clean wire timing |
+| Control MCU | PrinterUI and the updater use /dev/ttyS2 at 115200 8N1 with 101-byte framing. Static analysis maps M678 state flow, the L/M/P threshold arithmetic, host-profile motion fields, and firmware pulse-count formulas. M410 behavior depends on busy state and stored motor profile; see protocols.md. | Physical pinout and levels; calibrated motor travel; HSE frequency; physical output/chip identity; panel synchronization; auxiliary endpoint and clean wire timing |
 | Firmware update | The vendor startup script can toggle BOOT0/reset and call `stm32flash` to write the bundled Cortex-M image | Exact STM32 part/read-protection state and safe recovery behavior; do not use the update sequence as a test command |
 | Display userspace | Stock PrinterUI expects vendor interfaces including `/dev/disp` and `/dev/ion` | Replace/adapt these consumers for DRM/KMS and modern buffer allocation, or keep the vendor kernel while proving the ORA userspace stack |
 
@@ -59,12 +59,12 @@ On a newer kernel, the existing UI's vendor `/dev/disp` and `/dev/ion` assumptio
 
 ### 2. Complete the hardware/software interface map
 
-- **Closed protocol/hardware cases:**
-  - `M678 L` physical event: dynamic settling threshold ($M/10 + 100 \times \lfloor\text{avg}(L)/1200\rfloor$ ticks) for Stefan adhesion compensation. State 8 asserts PC15 active-low hardware UV enable, sends DLPC347x I²C `0x36 0x52 0x04` (Blue/UV ON), and sets bit 1 on EventGroup `0x2000001c` (`M114_DELATLIGHT_OVER`).
-  - Physical motor units: `Z` in mm (scaled by 100 on parse), `U` in mm/s, `D` is dead parameter. Active `CL60` internal motor (`S1` / `TIM4` on PB6/PB3 via `FUN_08000fb8`) resolution is **`1,600.0` steps/mm** (200 full steps/rev, 2 mm pitch $\implies$ 100 full steps/mm $\times$ 1/16 microstepping; acceleration ramp divisor $64/H = 32$; timer period $\text{ARR} = 5000 / U$). Alternate external motor (`S0` / `TIM2` on PB8/PB9) resolution is `12,800.0` steps/mm (1/128 microstepping; ramp divisor $256/H = 128$; $\text{ARR} = 24,000,000 / (12800 \times U)$). Lead screw pitch is standard T8x2 ($H = 2\text{ mm}$ from `halotMachine.xml`).
-  - Stop/abort semantics: `M410 S0` (instant hard stop), `M410 S1` (1600-step deceleration ramp stop), `M410 S2` (print abort: TIM3 disabled, UV light forced OFF via I²C `0x52 0x00` and PC15=1, TIM1 disabled, print task suspended). All acknowledge with `M410_OK1\n`.
-  - Homing and motion kinematics: `G0 Z%1 F%2 D%3 S%4 H%5 ` (D1=Up towards top endstop, D0=Down towards vat, S1=internal TIM4 / S0=external TIM2, H=HelicalPitch = 2 mm). Optical limit switch on **PA5 is strictly at the TOP of the Z-axis (upper limit switch)**; upward motion (`D1`) halts when `PA5 == 1` via a 1,600-step deceleration ramp on active TIM4 (or instant zeroing on TIM2), emitting `M114_OK1\n`. Downward motion (`D0`) ignores PA5 and travels downward to the vat (`LevelHeight = 170\text{ mm}`, 272,000 steps at 1,600 steps/mm). Standard `G28` is not used.
-  - Startup I²C: `0x36 0x54 [30 0c 30 0c 30 0c]` matches TI DLPC347x current command fingerprint (current calibration and physical driver validation open).
+- **Software mappings resolved; physical interpretation still open:**
+  - M678 threshold arithmetic is recovered. Under an 8 MHz HSE assumption, 100 TIM3 ticks are nominally one second; HSE is unmeasured. The L-based offset is exact in code, but a resin-flow or Stefan-adhesion explanation is only a hypothesis. State transitions write PC15 and issue mode-dependent output bytes; optical emission and endpoint identity are unverified.
+  - Motion helpers compute 1,600 internal or 12,800 alternate pulse counts per configured millimeter at H=2. The 1/16 and 1/128 driver interpretations and actual mm of travel are not verified on the board. Z/U labels come from host/profile code; M678 D is unused in the analyzed image.
+  - M410 always ACKs. While the busy byte is 1, only S2 enters the abort/reset path; S0/S1 only ACK. When not busy, the handler ignores the S value and selects timer/counter handling from stored motor profile and model. These register writes do not verify physical motion or UV output.
+  - G0 direction, profile selection, and PA5 checks are mapped in firmware. PA5 high selects M114_OK1 and affects the upward homing path, consistent with an upper reference input; sensor type, board net, location, and electrical level are not confirmed. LevelHeight=170 and HelicalPitch=2 are profile values, not measured mechanics.
+  - Startup bytes 36 54 and 36 52 04/00 match a TI DLPC347x command fingerprint. The silicon, physical bus connection, and relationship to the exposure panel or UV source remain unverified.
 - Keep the operator UI (`/dev/fb0` 800×480) and exposure display (ION → `/dev/disp` → HDMI → RK628 → MIPI DSI1 540×2560) strictly separate.
 - Capture only passive serial traffic first; do not probe by sending motion or UV commands during protocol discovery.
 
@@ -72,7 +72,7 @@ On a newer kernel, the existing UI's vendor `/dev/disp` and `/dev/ion` assumptio
 
 The HALOT architecture couples layer motion, hydrodynamic settling delay, UV exposure, and lift into a single atomic controller transaction (`M678`). To build a faithful port without breaking this state machine, three core boundaries must be satisfied:
 1. **Physical Display Submission & Synchronization:** Guarantee that subpixel-triplet BGRA frames (540×2560) written to ION and applied via `/dev/disp` (ioctl `0x42`/`0x43`) are fully latched by the RK628 bridge before STM32 transitions to exposure (`M114_DELATLIGHT_OVER`).
-2. **Safe M678 Layer Transaction & Fault Contract:** Wrap `M678` $\rightarrow$ `M114` polling $\rightarrow$ `M114_DELATLIGHT_OVER` $\rightarrow$ `M114_OK` into a single atomic transaction. Enforce safe cancellation/pause via `M410 S...` to ensure UV is physically deasserted on host fault or serial timeout.
+2. **Safe M678 Layer Transaction & Fault Contract:** Wrap M678 → M114 polling → M114_DELATLIGHT_OVER → M114_OK into one ordered transaction. Resolve the state-dependent M410 behavior and status timeouts. An M410 ACK does not prove the axis stopped or UV is off; cancellation needs a verified controller-state contract before it is enabled.
 3. **Odyssey Integration Seam (`HalotTransactionBackend`):** Integrate with Odyssey's job lifecycle using a dedicated layer transaction boundary rather than Odyssey's split `move_z()`, `start_curing()`, `stop_curing()` primitives.
 
 ### 4. Near-Term Milestone: `halot-inspect` ARMv7 and `HalotTransport` architecture
@@ -87,9 +87,9 @@ Prior to implementing an active actuator FSM, deploy an extended `halot-inspect`
 To integrate cleanly with Odyssey's async runtime (`tokio-serial`), implement `HalotTransport` as an encapsulation layer:
 - `encode_101_byte_frame(cmd: &str) -> [u8; 101]`: Applies 96-byte padding, delimiter `[0x55, 0x55, 0x55, 0x55]`, and trailing `\n`.
 - `incremental_line_decoder()`: Decodes lines asynchronously, identifying `M114_Busy_*`, `M114_DELATLIGHT_OVER`, `M114_OK`, and `M114_OK1`.
-- `startup_handshake()`: Queries MCU version (`V114`), models (`GET MODELS`), and performs top reference homing (`G0 Z170 F3 D1 S1 H2`).
+- startup_handshake(): Query MCU version (V114) and models (GET MODELS). Add homing only after the sensor input, travel limits, and rollback behavior are validated.
 - `m678_transaction()`: Atomic layer transaction orchestrating display latching, M678 execution, M114 polling, and UV-on synchronization.
-- `cancel_transaction()`: Emergency abort via `M410 S2`, turning off UV physically, followed by safe top carriage lift.
+- cancel_transaction(): Model the busy-gated M410 S2 path and await controller status. The physical UV-off effect and safe-lift behavior remain unverified; do not infer either from M410_OK1.
 - **Deployment Lifecycle:** TinaLinux uses OpenWrt-style `procd` with SquashFS + ext4 overlay. Packaging and running Odyssey requires an `/etc/init.d/odyssey` procd service script with clean, mutual-exclusion process management (never `killall -9`) ensuring guaranteed UV-off state on handover.
 
 ### 5. Port the board to mainline Linux

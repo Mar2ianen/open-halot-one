@@ -151,7 +151,7 @@ The `V114`/`89` pair is consistent with a version query and the firmware string 
 |---|---|---|
 | Version/model handshake | `V114`, `MODELS:`, `MODELS `, `GET MODELS:%s OK` | Startup trace captures `V114` → `89\n` and `MODELS:A` → `GET MODELS:A OK\n`; the version interpretation is consistent with `SWV1.89` in the MCU image. |
 | Z axis | `G0 Z500 F… D1 S1/S0 H…`; `G0 Z… F… D0 S1/S0 H…` | UI builders label the first command “up” and the second “down”; a [public HALOT-ONE host log](https://www.creationfactory.co/2022/01/rooting-creality-halot-one-resin-3d.html) independently labels `D1`/`D0` commands up/down, corroborating `D` as a direction selector (`D1` = Up towards upper limit switch; `D0` = Down towards vat). `Z` is distance in mm (scaled by 100 on parse). `F` is speed in mm/s. `S` selects the motor profile (`S1` = internal motor on TIM4 PB6/PB3, default for CL-60; `S0` = external motor on TIM2 PB8/PB9). `H` is the **Helical lead screw pitch** in mm (`H2` = 2.0 mm pitch T8x2 lead screw from `halotMachine.xml`), which sets the microstep ramp index divisor ($64/H=32$ for S1, $256/H=128$ for S0). |
-| Position/status | `M114`, `M113`, `M108`, `M410 S0/S1/S2` | `M108` returns three sampled GPIO levels as `M108_<0|1>_<0|1>_<0|1>`; the raw register bases and masks are below. `M410` always emits `M410_OK1\n`. Its sub-commands are mapped: `S0` is immediate hard stop (TIM4 disabled, step register cleared); `S1` is controlled deceleration (1,600 ramp-down steps on TIM4); `S2` is emergency print abort (disables TIM3, deasserts PC15 to 1, sends I²C `0x36 0x52 0x00` to turn off UV, disables TIM1 PWM, clears print state flags, and suspends FreeRTOS print task `0x20000024`). The trace has S0×2, S1×3, and S2×1, all acknowledged. |
+| Position/status | M114, M113, M108, M410 S0/S1/S2 | M108 returns three sampled GPIO levels as M108_<0|1>_<0|1>_<0|1>. M410 always emits M410_OK1. While the print busy byte is 1, only S2 takes the abort/reset path; S0/S1 only ACK. When not busy, the handler ignores the numeric S value and selects timer/counter behavior from the stored motor profile and model. The six commands in the earlier passive trace were all acknowledged; the ACK does not establish that a physical stop occurred. See M410 semantics below. |
 | Layer operation | `M678 Z… U… D… T… P… M… L…` | PrinterUI builds this exact ordered template for first, bottom, and regular layers. STM32 emits `M678_Busy` immediately after recognizing the opcode and before parsing the seven values; it then sets busy state and wakes a worker task. This confirms entry into the handler, not parameter validation or layer completion. The completed 2026-09-28 passive trace contains 1,591 M678 requests; every one has its M678_Busy reply, M114_DELATLIGHT_OVER sentinel, and following M114_OK. See the final trace summary below. |
 | Temperature | `M105`, `M105 T… ON`, `M105 T OFF`; reply template `M105_TA…_TB…` | Temperature query/report and on/off control paths. |
 | UV/light | `M42 P36 M1 S0` / `M42 P36 M1 S1`; `M355 P1 C…` / `M355 P1 D…` | UI names the `M42` calls `openLight`/`closeLight`; the MCU replies `M42_OK_LED`. In mode A, the helper bit-bangs an I²C-style transfer on GPIOB PB10/PB11 with different final data bytes for S0/S1 and polls for ACK; timeout is ignored by the command handler. Modes C/D use USART3 records, E writes a timer compare register, and F writes GPIOA set/reset bits. These register/transport effects do not identify the physical UV output. `M355_OK` is emitted before parameter checks. The `M355` handler selects a `C` or `D` token marker from the RAM packet-template prefix, then sends a 10-byte parameter packet and fixed 3-byte record over USART3; the direct relation to the model-selector byte is unresolved. |
@@ -258,65 +258,46 @@ The post-print `cxpmRunning.log` contains 1,592 M678 command-builder log entries
 
 The worker `FUN_080046f0` (called by the run-print task at `0x08007038`) gives a more specific dataflow. In state 0 (`0x0800471e`–`0x08004748`), it passes `Z` and `U` to `FUN_08000fb8` when byte `0x20000095` is nonzero, otherwise to `FUN_080036e0`; both helpers convert the doubles to integer timer/profile values and update the timer block at `0x200001f0`, with model-specific timer registers including `0x40000828` or `0x40000028`. The timer service functions `FUN_08002a60` and `FUN_08002708` consume those values and write the compare registers at those offsets while toggling raw bit-band aliases `0x42218198` or `0x422181a0`. In state 2 (`0x08004772`–`0x08004820`), the worker adds `T` to `Z` using the software double-add entry at `0x080003b2`, then passes `Z + T` with `U` to the selected helper. The zero-flag branch also uses `T × 64` to update the worker's `+0x1a4/+0x1a8` counters before passing `Z + T` and `U` to `FUN_080036e0`.
 
-Decompilation of `FUN_08000fb8` and `FUN_080036e0` completely resolves the physical units and motor scale for both paths:
-- `Z` is in **millimeters (mm)** (lift distance). The parser's `Z × 100.0` converts this to $10\ \mu\text{m}$ internal units.
-- `U` is in **millimeters per second (mm/s)** (lift speed).
-- `D` is in token slot 2 (`0x200000b8`), but is a dead parameter (never referenced by worker or motor routines).
-- **Active `CL60` Internal Motor Path (`S1` / `TIM4` on PB6/PB3 via `FUN_08000fb8`):**
-  - Selected when `[0x20000095] != 0` (CL-60 default: `<ExternalMotor value="false"/>` in `halotMachine.xml`).
-  - **Distance formula (`0x08001154`–`0x08001182`):**
-    $$\text{Total Steps} = \frac{(Z \times 100.0) \times 32.0}{H} = \frac{Z \times 3200.0}{H}$$
-    For standard CL-60 $H = 2.0\text{ mm}$ (T8x2 lead screw):
-    $$\text{Resolution} = \frac{3200.0}{2.0} = \mathbf{1,600.0}\text{ steps/mm}$$
-    This corresponds to 100 full steps/mm (200 full steps/rev with 2 mm pitch) at 1/16 microstepping ($100 \times 16 = 1,600\text{ steps/mm}$).
-  - **Acceleration ramp table divisor (`0x08001186`–`0x0800119a`):**
-    $$\text{Divisor} = \frac{6400 / H}{100} = \frac{64}{H} \xrightarrow{H=2} 32$$
-    Stored at `[0x200001f0, #0x1b4]`. In `TIM4 ISR` (`0x08002b98`), the ramp table index advances every $32\text{ steps} = 0.02\text{ mm}$ (2 full mechanical steps).
-  - **Speed & Timer ARR (`0x080010c0`–`0x080010fa`):**
-    $f_{\text{step}} = U \times 6400.0 \times 1.5 / H = U \times 4800.0\text{ Hz}$.
-    Base timer clock is $24,000,000\text{ Hz}$:
-    $$\text{ARR} = \frac{24,000,000}{U \times 4800} = \frac{\mathbf{5000}}{\mathbf{U}}$$
-    Stored at `[0x200001f0, #0x1ac]`.
-  - **Homing deceleration:** When PA5 trips during homing (`[0x20000114] == 2`), TIM4 ISR loads `0x640` (1,600 steps $= 1.0\text{ mm}$) to execute a controlled deceleration ramp-down to a halt (`0x08002aa6`).
-- **Alternate External Motor Path (`S0` / `TIM2` on PB8/PB9 via `FUN_080036e0`):**
-  - Selected when `[0x20000095] == 0` (`<ExternalMotor value="true"/>`).
-  - **Distance formula (`0x0800371a`):** Uses constant $12800.0$ (`0x40c90000`):
-    $$\text{Total Steps} = \frac{(Z \times 100.0) \times 128.0}{H} \xrightarrow{H=2} Z \times \mathbf{12,800.0}\text{ steps}$$
-    Resolution is **`12,800.0` steps/mm** (1/128 microstepping).
-  - **Acceleration ramp divisor:** $256 / H \xrightarrow{H=2} 128$ steps ($= 0.01\text{ mm} = 1$ full mechanical step).
-  - **Speed & Timer ARR:** $\text{ARR} = 24,000,000 / (12800 \times U)$.
-  - **Homing stop:** When PA5 trips, clears remaining steps to 0 immediately without deceleration.
+Static disassembly of FUN_08000fb8 and FUN_080036e0 recovers the two firmware planner formulas. Host call sites and the CL60 profile label Z as millimeters and U as millimeters per second, but this printer's mechanical scale has not been measured.
+- Z is multiplied by 100 before the motion helper. U is passed to the planner. In M678, D is stored at 0x200000b8 but has no consumer in the analyzed image; this does not change the separate G0 direction field.
+- Internal CL60 profile: halotMachine.xml sets ExternalMotor=false. The planner computes a command pulse count from (Z × 100) × 32 / H. With the configured H=2 this is Z × 1,600 pulse counts. The 1/16-microstep explanation assumes a 200-step motor and a 2 mm lead; neither driver mode nor installed screw was checked.
+- The internal ramp-table divisor is 64/H (32 at H=2). The timer reload formula recovered from the helper is ARR=5000/U. These are firmware calculations; they do not prove the physical pulse frequency or distance.
+- In the homing path, the TIM4 ISR loads 0x640 (1,600) into the remaining pulse counter when the tested PA5 condition is met. This is a software ramp count, not a measured 1.0 mm of travel.
+- Alternate profile: the helper computes (Z × 100) × 128/H, or Z × 12,800 pulse counts at H=2. The 1/128-microstep interpretation assumes the corresponding driver configuration, which has not been observed on the board. The helper's timer formula is ARR=24,000,000/(12,800 × U).
+- halotMachine.xml supplies H=2 and LevelHeight=170 for CL60. They are profile values, not measurements of the installed mechanics.
 
 ### M410 Stop and Emergency Abort Semantics
 
-Static analysis of the `M410` handler at `0x080060bc` maps all three sub-commands, all acknowledging with `M410_OK1\n`:
-- `M410 S0`: **Immediate hard motor stop** (`0x0800619e`). Disables TIM4 (`0x40000800`), zeroes remaining move step counter `[0x200001f0, #0x1b0]`, and halts stepping instantly without deceleration.
-- `M410 S1`: **Controlled deceleration motor stop** (`0x0800617e`). Configures deceleration buffer `[0x200001f0, #0x1b0] = 0x640` (1,600 ramp-down steps), starts TIM4, and polls until deceleration completes before returning.
-- `M410 S2`: **Emergency print abort** (`0x080060ec`). When in active printing state (`0x20000076 == 1`), immediately disables TIM3 (`0x40000400`), executes `FUN_08004510` (deasserts PC15 active-low UV enable to `1` and sends I²C `0x36 0x52 0x00` to turn OFF UV light), disables stepper PWM timer TIM1 (`0x40012c00`), resets GPIOA motor driver pins (`0x40010800`), clears all active print state flags (`0x20000068`, `0x20000077`, `0x20000078`, `0x20000074`, `0x20000076`, `0x20000075`), and suspends FreeRTOS print task `0x20000024` via `vTaskSuspend` (`0x080075f8`).
+Static analysis of the M410 handler at 0x080060bc shows that every request receives M410_OK1, but the ACK alone does not prove that a stop or abort action occurred.
 
-### G0 Movement, Homing, and Endstop Mechanics
+- While the print busy byte 0x20000076 is 1, the handler parses parameter S; only value 2 enters the abort/reset path. Values 0, 1, missing, or other non-2 values return after the ACK without those reset writes. The S2 path clears the TIM3 control bit and print counters/state, writes 1 through the PC15 GPIOC ODR alias 0x422201bc, calls the model-dependent output-off helper, and suspends the print task when its task pointer is nonzero. The helper sends the model-specific record or, for other model modes, the software-generated command 0x36 0x52 0x00. This is firmware behavior; the connected hardware and physical light state have not been verified.
+- When the busy byte is not 1, the handler ignores the numeric S value. It selects the stop path from the stored motor-profile flag and model mode: the external profile clears the TIM2 enable bit and its step counter; the internal profile has model/state-dependent TIM4 behavior, including a 0x640 step-count ramp in one branch and timer/counter clearing in another. In the observed MODELS:A branch, the idle path clears the TIM4 enable bit and step counter. The source does not implement distinct S0 immediate-stop and S1 deceleration commands as previously described.
 
-The printer does not use standard 3D-printer `G28` homing. All axis travel and homing use vendor-framed `G0`:
-- **Command Template:** `G0 Z%1 F%2 D%3 S%4 H%5 `
-  - `Z`: Distance in millimeters (e.g. `Z170` for full stroke travel, `Z500` for make-zero travel limit). The parser scales this by $100.0$ (`0x40590000`) into internal $10\ \mu\text{m}$ units before passing to motor planners.
-  - `F`: Speed in millimeters per second (e.g. `F3` for 3 mm/s travel).
-  - `D`: Direction selector (`D1` = Upward towards the upper optical limit switch; `D0` = Downward towards the resin vat / floor).
-  - `S`: Motor profile selector (`S1` = internal motor profile on TIM4, used by default on `CL60`; `S0` = external motor profile on TIM2).
-  - `H`: **Helical lead screw pitch** in millimeters (`H2` = 2.0 mm pitch, matching the T8x2 lead screw defined in `halotMachine.xml` under `<HelicalPitch value="2"/>`). In STM32 firmware:
-    - Active `CL60` internal motor (`S1`, `0x08000fb8` / `TIM4` on PB6 step, PB3 dir): Microstep ramp index divisor is $64 / H = 32$ ($0.02\text{ mm}$ per ramp increment).
-    - Alternate external motor (`S0`, `0x080036e0` / `TIM2` on PB8 step, PB9 dir): Microstep ramp divisor is $256 / H = 128$ ($0.01\text{ mm}$ per ramp increment).
+### G0 motion and homing software paths
 
-#### Optical Limit Switch PA5 (Upper Endstop)
-- The optical limit switch is connected to GPIOA bit 5 (**PA5**), physically mounted at the **TOP of the Z axis (upper limit)**.
-- **Upward motion (`D1`):** In `TIM4 ISR` (`0x08002a60`), when `GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5) == 1` and `Direction == 1` (`[0x200001f0, #0x1bc] == 1`), if homing is active (`[0x20000114] == 2`), it loads `0x640` (1,600 steps) to execute a controlled deceleration ramp-down to a halt (`0x08002aa6`). In `TIM2 ISR` (`0x08002708`), remaining steps are cleared immediately to zero (`[0x200001f0, #0x194] = 0`). In the G0 command parser (`0x0800604c`), if `D == 1` and `PA5 == 1`, upward movement is rejected before starting (`bne #0x8005f76`).
-- **Downward motion (`D0`):** Moves away from PA5 towards the vat. In both `TIM4 ISR` and `TIM2 ISR`, PA5 is **NOT checked** when `Direction == 0` (the branch skips all halt logic). Downward travel completes strictly when the requested step counter reaches zero.
-- **Status Reporting (`M114`):** At `0x08005fb6`, STM32 reads `GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_5)`. If `PA5 == 1` (carriage at the top optical limit), it responds `M114_OK1\n`. If `PA5 == 0` (carriage down in the print area), it responds `M114_OK\n`. In the passive 1,591-layer print trace, all 1,591 layer completions return `M114_OK\n`; `M114_OK1\n` occurs strictly during initial startup homing and after final post-print lift.
+The host uses the vendor-framed G0 template; these are firmware and host semantics, not a physical measurement of the axis:
 
-#### Physical Homing and Leveling Sequence
-The machine profile `CL60` in `halotMachine.xml` defines `LevelHeight=170` (170 mm total travel between the top optical limit switch and the vat floor):
-1. **Top Reference Homing:** Host sends `G0 Z170 F3 D1 S1 H2` (or `G0 Z500 F%1 D1 S0/S1 H%2` in `SerialPortMakeZeroLevel::getMotorMoveUpCommand`). The build platform moves UP until the carriage flag enters the top optical sensor (`PA5 = 1`). In the active `S1` internal motor path, TIM4 ISR executes a 1,600-step controlled deceleration ramp to a halt (or clears steps instantly in `S0`). Host polls `M114` and receives `M114_OK1\n`.
-2. **Descent to Vat Origin:** Host sends `G0 Z170 F3 D0 S1 H2` (`D0` = down). Stepper ISR steps downward $170\text{ mm} \times 1,600\text{ steps/mm} = 272,000$ steps (or $170 \times 12,800 = 2,176,000$ steps for `S0`) without checking PA5. Upon step completion, host polls `M114` and receives `M114_OK\n`.
-3. **Post-Print Terminal Lift:** Host sends `M410 S2` (disables TIM3, turns off UV, clears print flags, suspends print task), then sends `G0 Z170 F3 D1 S1 H2` (`D1` = up). Carriage lifts to the top, trips `PA5 = 1`, halts, and emits `M114_OK1\n`.
+- Command template: G0 Z%1 F%2 D%3 S%4 H%5.
+- Z is parsed after multiplication by 100 before the motion helper. Host call sites and the CL60 profile treat it as distance in millimeters; actual travel per count has not been measured.
+- F is supplied by host call sites as travel speed; the UI/profile use mm/s.
+- D is a direction selector in the host template: D1 is named upward and D0 downward. The MCU uses this value in its motion logic.
+- S selects a firmware motor-planner path. The CL60 profile sets ExternalMotor=false and uses the internal helper; the alternate profile selects the other helper.
+- H is consumed by both helpers in their ramp/count calculations. halotMachine.xml sets HelicalPitch=2 for CL60. This confirms the configured value and code use, not the installed screw pitch.
+
+#### GPIOA bit 5 (PA5) and motion-stop logic
+
+- The firmware samples GPIOA bit 5. M114 returns M114_OK1 when the sampled bit is high and M114_OK when it is low.
+- In the upward homing path, the TIM4 ISR checks PA5 and loads 0x640 (1,600) into the remaining-step counter for a ramp-down. The alternate timer path clears its remaining-step counter. The G0 parser also rejects an upward request when PA5 is already high.
+- The reviewed downward path does not test PA5 and completes from the requested step counter.
+- These control-flow facts and the host's upward/downward labels are consistent with an upper travel-reference input. They do not establish that the board pin is connected to an optical sensor, where it is mounted, or its electrical polarity.
+
+#### Host homing and leveling templates
+
+The CL60 profile contains LevelHeight=170, and host code builds upward/downward G0 requests around that value. UART traces establish which commands and status replies were sent; they do not prove that the installed mechanics moved 170 mm or that the vat plane is the calibrated zero.
+
+- The stock host's top-reference path sends an upward G0 request and polls M114; the terminal move after a print also uses an upward request.
+- A downward G0 request is used by host code to move toward its configured vat reference.
+- Treat 170 as a profile value until axis travel and sensor location are measured.
 
 ### TI DLPC347x-Compatible I²C Command Fingerprint
 
@@ -328,7 +309,7 @@ $$\text{ExtraDelay}(\text{ticks}) = 100 \times \left\lfloor \frac{\text{average}
 $$\text{Start\_Threshold} = M/10 + \text{ExtraDelay}$$
 $$\text{End\_Threshold} = \text{Start\_Threshold} + P/10$$
 
-At nominal 100 Hz TIM3 tick rate (10 ms per tick), 100 ticks equals exactly 1.0 second. Thus, for each 1200 units of filtered layer area `L`, the printer automatically adds 1.0 second of settling delay before UV exposure begins. This provides dynamic hydrodynamic compensation for resin suction / Stefan adhesion squeeze flow under the plate. When TIM3 reaches `Start_Threshold` (`0x20000070`), it invokes `FUN_08004554`, which transitions to state 8, asserts active-low UV hardware enable on PC15 (`0`), sends I²C command `0x36 0x52 0x04` (DLPC347x RGB LED Enable, Blue/UV channel ON), and sets bit 1 on EventGroup `0x2000001c` (causing the next host `M114` poll to return `M114_DELATLIGHT_OVER\n`). When TIM3 reaches `End_Threshold` (`0x2000006c`), `FUN_08004510` deasserts PC15 (`1`), sends I²C `0x36 0x52 0x00` (LED OFF), and advances the state machine toward terminal Z movement and `M114_OK`. Parameter `D` is parsed into `0x200000b8` but is completely unreferenced by the worker or any other function.
+The firmware formula is exact in the analyzed image: each floor(average(L)/1200) step adds 100 TIM3 ticks to the start threshold; M/10 and P/10 are also added as counter values. If HSE is 8 MHz, the configured TIM3 rate is nominally 100 Hz, so 100 ticks would be about one second. HSE has not been measured, and neither L's physical unit nor a resin-flow explanation is established; hydrodynamic or Stefan-adhesion compensation remains a hypothesis. At the start threshold, the worker advances to state 8, writes the PC15 GPIO alias low, sends the model-dependent output command (in MODELS:A, bytes 36 52 04), and signals the event consumed by M114 as M114_DELATLIGHT_OVER. At the terminal threshold it writes PC15 high, sends the corresponding output-off command (36 52 00 in MODELS:A), then advances the state machine. This proves commanded software transitions only: the chip on that path and physical optical output are unverified. Parameter D is parsed into 0x200000b8 but has no consumer in the analyzed image.
 
 The shared 2.238.2 package's STM32 V1.821 image preserves this worker and timer core: a normalized Thumb comparison matches all 310 worker code instructions (the inline 8-byte `TBB` table also matches), all 99 IRQ 29 callback instructions, and all 39 timer-initializer instructions. Its RAM globals are relocated and its external helper targets are build-specific; this is static code evidence, not proof of equal helper or board behavior. Exact extents, old-image state addresses, and comparison method are in the [cross-platform lineage notes](related-platforms.md#stm32-m678-worker-and-tim3-comparison).
 
@@ -357,6 +338,13 @@ The STM32 state-7 worker sets the event bit that the `M114` handler can consume 
 
 On a read-only LAN check on 2026-09-29, the printer's USB mount `/mnt/exUDISK` still held the completed 759,798,860-byte strace capture. Its SHA-256 (`57eed4f4c2b8146bde6ff09ef10324df01367b029b6638c256f5bcb1c3827686`) exactly matches the analyzed local evidence copy; the local CXDLP fixture also matches the USB copy by SHA-256. `pidof strace` found no active recorder, so the USB file is the completed print trace, not a continuing capture. The raw strace is kept out of the public repository because it traces PrinterUI file I/O as well as UART reads/writes; the public protocol map contains the sanitized interpretation.
 
+### Second passive print capture (2026-10-02)
+
+A separate strace capture started at 06:30 UTC on the HALOTLOG USB drive. The firmware-side UART decoder recovered 41,978 writes, all valid 101-byte frames, and 41,966 complete RX lines with no trailing partial UART bytes. It contains 1,540 M678 cycles; all 1,540 have M678_Busy, M114_DELATLIGHT_OVER, and a later M114_OK. By command fields, four cycles used P=40000 and the remaining 1,536 used P=4200, all with Z5/U2/D2/T0.05/M3000. Median M678-to-sentinel was 7.069 s, sentinel-to-M114_OK 4.426 s, and cycle interval 11.830 s. These are strace-observed host timings, not direct timer or wire measurements.
+
+The trace has four M410 requests: S1 at 06:35:06, S0 at 06:57:37, S1 at 06:58:27, and S2 at 11:40:30; all returned M410_OK1. The first S1 followed the first M678_Busy reply. The final S2 followed the layer-completion sequence and preceded the terminal G0 request, so this print did not exercise the busy-gated S2 reset branch. The pause-area S0/S1 traffic was followed by G0 moves; this is timing correlation, not a measurement of motor stopping.
+
+The USB strace file reached exactly 4,294,967,295 bytes on the vfat volume and stopped at the single-file limit. The preserved compressed copy passes gzip integrity checks. All 1,540 decoded layer transactions and the final upward G0/M114_OK1 sequence occur before the cap; the later quiet tail is incomplete. The raw capture, metadata, and PrinterUI maps remain in the private local archive and the original strace remains on the USB drive.
 ## STM32 ROM bootloader protocol
 
 The Linux rootfs includes `stm32flash 0.5`. The `stm32_update` startup script controls the H616-side BOOT0 and RESET lines, then invokes `stm32flash` on the same UART to identify and write STM32 flash at `0x08000000`. This is separate from the printer's ASCII/G-code-like application protocol. ST documents the USART system bootloader in [AN3155](https://www.st.com/resource/en/application_note/an3155-usart-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf) and boot-mode selection in [AN2606](https://www.st.com/resource/en/application_note/an2606-introduction-to-system-memory-boot-mode-on-stm32-mcus-stmicroelectronics.pdf).
