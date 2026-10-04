@@ -9,8 +9,34 @@ The current public project is [open-halot-one](https://github.com/Mar2ianen/open
 ## Fit with the existing ORA stack
 
 - [Odyssey](https://github.com/Open-Resin-Alliance/Odyssey) is a printer backend/engine. Its current README describes processing Prusa SL1 jobs for Apollo controllers and the Prometheus MSLA printer. Its YAML configuration includes a serial device, baud rate, display framebuffer, and printer G-code commands. The current `main` includes a generic pixel-group packer with configurable per-sample bit widths, left/right pad bits, and byte-order inversion; the Athena2 profile uses eight 3-bit samples plus 8 pad bits in each 32-bit framebuffer group. This is reusable packing logic, but its framebuffer sink and Athena2 group layout do not implement CL-60 output. HALOT's confirmed userspace transform packs three adjacent 8-bit source samples as `[sample[2], sample[1], sample[0], 0xff]`, then submits a 540×2560 BGRA frame through the vendor H616 HDMI → RK628 → MIPI path. HALOT support therefore still needs a device backend/profile and that distinct output path; its command protocol and panel path are not plug-compatible by assumption. See Odyssey's [`display.rs`](https://github.com/Open-Resin-Alliance/Odyssey/blob/f7c8e68537848eabf3be09841a924d42b9a82403/src/display.rs) and [Athena2 config](https://github.com/Open-Resin-Alliance/Odyssey/blob/f7c8e68537848eabf3be09841a924d42b9a82403/resources/configs/athena2.yaml).
-- [Orion](https://github.com/Open-Resin-Alliance/Orion) is a Flutter frontend. Its current Linux build instructions target ARM64 and its deployment notes focus on Raspberry Pi/flutter-pi. It needs to be built and integrated for this H616 system, or replaced by a small HALOT-specific UI during bring-up.
+- [Orion](https://github.com/Open-Resin-Alliance/Orion) is ORA's Flutter/Dart operator UI for Odyssey. The inspected source has file, print-status, settings, and tools screens and an Odyssey HTTP API client. Its current CI builds `flutter-pi` bundles for generic ARMv7 and AArch64; its README deployment path is Raspberry Pi/flutter-pi. The existing `ApiService` speaks the legacy Odyssey routes and file schema, so the HALOT service needs a compatibility adapter or a HALOT-aware Orion API client. Current Orion `main` is Apache-2.0 and retains a `NOTICE`; its README says older GPLv3 releases remain under that license.
 - [DragonFruit](https://github.com/Open-Resin-Alliance/DragonFruit) and [LumenFormat](https://github.com/Open-Resin-Alliance/LumenFormat) are the slicer and open job-format projects. LUMEN v1.0 is published. The latest checked LumenFormat `main` (`109d7d444c9714d8d41f3e3e0ddb47e21eaa1eda`, rechecked 2026-09-30) says Odyssey consumes LUMEN, but the checked Odyssey `main` (`f7c8e68537848eabf3be09841a924d42b9a82403`) has no LUMEN dependency and accepts only `.sl1` in [`src/printfile.rs`](https://github.com/Open-Resin-Alliance/Odyssey/blob/f7c8e68537848eabf3be09841a924d42b9a82403/src/printfile.rs). The checked DragonFruit `main` (`f6c7a20043c16c54d6263c6bb7e308a5f6d27377`) also lacks the Lumen submodule its README describes. Treat both integrations as undocumented/unverified in those snapshots. LumenFormat's Rust reader is reusable format code, but a CL-60 adapter must handle per-sector masks/timing and either implement the extra cure-and-move cycle per sector or reject multi-sector files; HALOT also needs its own image conversion, exposure sink, and scheduler. Agree with ORA on the job format and adapter boundary; do not assume the stock Creality format or Odyssey's `.sl1` path already covers HALOT jobs.
+
+### UI reuse candidates
+
+For the browser, [Mainsail](https://github.com/mainsail-crew/mainsail) or
+[Fluidd](https://github.com/fluidd-core/fluidd) can supply a mature printer UI,
+but neither is a drop-in client for the Creality service. Both are Klipper /
+Moonraker frontends; HALOT would need a compatibility service that maps its
+job lifecycle, files, status, and controls to the subset those clients use.
+Odyssey's own README documents a previous Mainsail integration using Klipper,
+synthetic `.gcode` entries, and intercepted start/pause/resume/stop actions.
+That is a concrete precedent for an adapter, not evidence that the current
+HALOT branch already has one. A small browser UI over Odyssey's existing
+REST/SSE endpoints would require less protocol emulation if the Mainsail
+compatibility surface proves too broad.
+
+For the on-printer screen, Orion is the strongest reuse candidate. The checked
+Orion `ApiService` polls `/status` once per second and calls legacy Odyssey
+routes such as `/files?location=...`, `/file/metadata`, and
+`/print/start?location=...`; the current local HALOT branch uses different file
+route parameters and resource paths, so those API calls need translation. The
+screen is 800×480 and its touch input is already exposed by Linux, but running
+Orion through `flutter-pi` is not yet proven: flutter-pi requires a working
+DRM/KMS/DRI accelerated display path, while current HALOT evidence confirms the
+vendor `/dev/fb0` and `/dev/mali0` paths but not a usable DRM/KMS render device.
+Check the target's graphics interfaces and Flutter engine/runtime before
+replacing PrinterUI. Keep the exposure-panel ION/`/dev/disp` path independent.
 
 The ORA contact page directs project requests to the relevant repository's GitHub issues and lists Discord for community coordination. No request has been sent by this project.
 
